@@ -439,7 +439,10 @@ def resolve_start_target(
             return target
 
     if repo in {target.repo for target in index_state.start_targets}:
-        raise CliError(f"branch {branch!r} is not available for repo {repo!r}")
+        raise CliError(
+            f"branch {branch!r} is not available for repo {repo!r}; "
+            "if you just pushed it to GitHub, run `nightlies sync` and try again"
+        )
     raise CliError(f"repo {repo!r} is not configured")
 
 
