@@ -748,6 +748,25 @@ class TestCli(unittest.TestCase):
             "error: Branch feature/test on herbie already queued\n",
         )
 
+    def test_cmd_start_explains_that_sync_may_add_a_missing_branch(self) -> None:
+        state = cli.IndexState(False, [cli.StartTarget("herbie", "main", False)])
+
+        with (
+            mock.patch.object(cli, "load_client_config", return_value=self.client_config()),
+            mock.patch.object(cli, "infer_repo", return_value="herbie"),
+            mock.patch.object(cli.ClientConfig, "fetch", return_value=""),
+            mock.patch.object(cli.IndexParser, "parse", return_value=state),
+            mock.patch("sys.stderr", new_callable=io.StringIO) as stderr,
+        ):
+            rc = cli.main(["start", "feature/test"])
+
+        self.assertEqual(rc, 1)
+        self.assertEqual(
+            stderr.getvalue(),
+            "error: branch 'feature/test' is not available for repo 'herbie'; "
+            "if you just pushed it to GitHub, run `nightlies sync` and try again\n",
+        )
+
     def test_main_start_without_branch_defaults_to_current_branch(self) -> None:
         requests: list[urllib.request.Request] = []
 
