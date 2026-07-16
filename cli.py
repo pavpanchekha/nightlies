@@ -420,7 +420,7 @@ def matching_run_logs(
             continue
         if selector.branch is not None and run.branch != selector.branch:
             continue
-        if selector.date is not None and run.date != selector.date:
+        if selector.date is not None and not run.date.startswith(selector.date):
             continue
         if selector.time is not None and run.time != selector.time:
             continue
@@ -773,7 +773,12 @@ def normalize_time(value: str | None) -> str | None:
 
 def add_run_selector_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("branch", nargs="?", default=None, help="Branch name.")
-    parser.add_argument("date", nargs="?", default=None, help="Run date as YYYY-MM-DD.")
+    parser.add_argument(
+        "date",
+        nargs="?",
+        default=None,
+        help="Run date as YYYY, YYYY-MM, or YYYY-MM-DD.",
+    )
     parser.add_argument("time", nargs="?", default=None, type=normalize_time, help="Run time as HH:MM:SS or HHMMSS.")
 
 

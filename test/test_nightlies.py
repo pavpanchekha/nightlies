@@ -303,6 +303,42 @@ class TestCli(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertEqual(stdout.getvalue(), "2026-04-20 09:08:32 taylor-order0\n")
 
+    def test_cmd_list_accepts_partial_date_filters(self) -> None:
+        entries = [
+            cli.LogEntry(
+                name="2026-08-19-123456-1-herbie-taylor-order0.log",
+                url="/logs/august.log",
+            ),
+            cli.LogEntry(
+                name="2026-09-20-123456-1-herbie-taylor-order0.log",
+                url="/logs/september.log",
+            ),
+            cli.LogEntry(
+                name="2027-08-21-123456-1-herbie-taylor-order0.log",
+                url="/logs/next-year.log",
+            ),
+        ]
+
+        with mock.patch.object(
+            cli,
+            "iter_entries",
+            side_effect=lambda _client_config: iter(reversed(entries)),
+        ):
+            for date, expected in (
+                ("2026", "2026-08-19 12:34:56 taylor-order0\n2026-09-20 12:34:56 taylor-order0\n"),
+                ("2026-08", "2026-08-19 12:34:56 taylor-order0\n"),
+            ):
+                with mock.patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                    args = cli.build_parser().parse_args(["list", "taylor-order0", date])
+                    rc = cli.cmd_list(
+                        self.client_config(),
+                        "herbie",
+                        cli.RunSelector(args.branch, args.date, args.time),
+                    )
+
+                self.assertEqual(rc, 0)
+                self.assertEqual(stdout.getvalue(), expected)
+
     def test_cmd_list_branch_lists_all_matching_runs(self) -> None:
         entries = [
             cli.LogEntry(
