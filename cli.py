@@ -484,6 +484,7 @@ def tail_log(client_config: ClientConfig, url: str) -> None:
 
 ## Reports
 
+REPORT_PATH_CUTOFF = datetime.date(2025, 12, 28)
 PUBLISH_RE = re.compile(r"^Publishing report directory .* to .*/reports/([^/]+)/([^/\n]+)$", re.MULTILINE)
 
 
@@ -755,7 +756,15 @@ def cmd_status(client_config: ClientConfig, repo: str, selector: RunSelector) ->
     run_log = next(matching_run_logs(iter_entries(client_config), repo, selector), None)
     if run_log is None:
         raise CliError("No matching log found.")
-    _, manifest = fetch_published_report(client_config, repo, run_log.entry)
+    log_text = client_config.fetch(run_log.entry.url)
+    report_url = find_report_url_in_log(repo, log_text)
+    if report_url is None:
+        if datetime.date.fromisoformat(run_log.date) < REPORT_PATH_CUTOFF:
+            print("No report (run is too old). Run `uvx nightlies log` to view log details")
+        else:
+            print("No report. Run `uvx nightlies log` to view log details")
+        return 0
+    manifest = fetch_manifest(client_config, report_url)
     print(manifest.text())
     return 0
 

@@ -456,7 +456,7 @@ class TestCli(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertIn("herbie / feature\n", stdout.getvalue())
 
-    def test_cmd_status_requires_published_report(self) -> None:
+    def test_cmd_status_allows_missing_report(self) -> None:
         entry = cli.LogEntry(
             name="2026-04-20-150000-1-herbie-taylor-order0.log",
             url="/logs/taylor-order0.log",
@@ -466,14 +466,42 @@ class TestCli(unittest.TestCase):
         with (
             self.client_open_patch(opener),
             mock.patch.object(cli, "iter_entries", return_value=iter([entry])),
+            mock.patch("sys.stdout", new_callable=io.StringIO) as stdout,
         ):
-            with self.assertRaisesRegex(cli.CliError, "No published report found in log."):
-                args = cli.build_parser().parse_args(["status", "taylor-order0", "2026-04-20", "150000"])
-                cli.cmd_status(
-                    self.client_config(),
-                    "herbie",
-                    cli.RunSelector(args.branch, args.date, args.time),
-                )
+            args = cli.build_parser().parse_args(["status", "taylor-order0", "2026-04-20", "150000"])
+            rc = cli.cmd_status(
+                self.client_config(),
+                "herbie",
+                cli.RunSelector(args.branch, args.date, args.time),
+            )
+
+        self.assertEqual(rc, 0)
+        self.assertEqual(stdout.getvalue(), "No report. Run `uvx nightlies log` to view log details\n")
+
+    def test_cmd_status_explains_old_missing_report(self) -> None:
+        entry = cli.LogEntry(
+            name="2025-08-30-030107-1-herbie-main.log",
+            url="/logs/main.log",
+        )
+        opener = FakeOpener({self.absolute_url(self.client_config(), entry.url): b"old log\n"})
+
+        with (
+            self.client_open_patch(opener),
+            mock.patch.object(cli, "iter_entries", return_value=iter([entry])),
+            mock.patch("sys.stdout", new_callable=io.StringIO) as stdout,
+        ):
+            args = cli.build_parser().parse_args(["status", "main", "2025-08-30", "030107"])
+            rc = cli.cmd_status(
+                self.client_config(),
+                "herbie",
+                cli.RunSelector(args.branch, args.date, args.time),
+            )
+
+        self.assertEqual(rc, 0)
+        self.assertEqual(
+            stdout.getvalue(),
+            "No report (run is too old). Run `uvx nightlies log` to view log details\n",
+        )
 
 
     def test_cmd_setup_saves_client_config(self) -> None:
