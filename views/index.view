@@ -42,8 +42,6 @@
     <h2><kbd class="name">{{repo.name}}</kbd>
       %if repo.slack and repo.slack.channel:
       (posting to <kbd>#{{repo.slack.channel}}</kbd>)
-      %elif repo.slack:
-      (posting via webhook)
       %end
     </h2>
   </summary>
