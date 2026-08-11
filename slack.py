@@ -122,25 +122,20 @@ def build_fatal(name : str, text : str) -> Response:
     return res
 
 SLACK_API_URL = "https://slack.com/api/chat.postMessage"
-SLACK_WEBHOOK_PREFIX = "https://hooks.slack.com/"
 
 def parse_slack_spec(
     spec: str,
     secrets: Mapping[str, Mapping[str, str]],
-) -> tuple[Optional[str], Optional[str], Optional[str]]:
-    if "/" in spec:
-        workspace, channel = spec.split("/", 1)
-        assert workspace in secrets, f"Unknown Slack workspace {workspace!r}"
-        token = secrets[workspace].get("token")
-        assert token, f"No token for Slack workspace {workspace!r}"
-        return None, token, channel
-    else:
-        assert spec in secrets, f"Unknown Slack key {spec!r}"
-        webhook_url = secrets[spec].get("slack")
-        assert webhook_url, "No Slack URL for key {spec!r}"
-        assert webhook_url.startswith(SLACK_WEBHOOK_PREFIX), \
-            f"Invalid webhook URL {webhook_url!r} for Slack key {spec!r}"
-        return webhook_url, None, None
+) -> tuple[str, str]:
+    if "/" not in spec:
+        raise SlackError(f"Invalid Slack spec: {spec!r}")
+    workspace, channel = spec.split("/", 1)
+    if workspace not in secrets:
+        raise SlackError(f"Unknown Slack workspace: {workspace}")
+    token = secrets[workspace].get("token")
+    if not token:
+        raise SlackError(f"Missing token for Slack workspace: {workspace}")
+    return token, channel
 
 def send_api(token: str, channel: str, res: Response) -> None:
     payload = res.to_json()
@@ -164,44 +159,24 @@ def send_api(token: str, channel: str, res: Response) -> None:
         error = reply.get("error", "unknown_error")
         raise SlackError(f"Slack API error: {error}")
 
-def send_webhook(url: str, res: Response) -> None:
-    payload = json.dumps(res.to_json()).encode("utf8")
-    req = urllib.request.Request(url, data=payload, method="POST")
-    req.add_header("Content-Type", "application/json; charset=utf8")
-
-    try:
-        with urllib.request.urlopen(req, timeout=10) as response:
-            response.read()
-    except urllib.error.HTTPError as exc:
-        reason = exc.read().decode("utf-8", errors="replace")
-        raise SlackError(f"{exc.code} {exc.reason}: {reason}")
-
 class SlackOutput:
     def __init__(self, secrets: Mapping[str, Mapping[str, str]], spec: str, name: str):
-        webhook_url, token, channel = parse_slack_spec(spec, secrets)
-        self.webhook_url = webhook_url
+        token, channel = parse_slack_spec(spec, secrets)
         self.token = token
         self.channel = channel
         self.name = name
         self.warnings: Dict[str, str] = {}
-
-    def _send(self, res: Response) -> None:
-        if self.token and self.channel:
-            send_api(self.token, self.channel, res)
-        else:
-            assert self.webhook_url
-            send_webhook(self.webhook_url, res)
 
     def warn(self, key: str, message: str) -> None:
         self.warnings[key] = message
 
     def fatal(self, message: str) -> None:
         data = build_fatal(self.name, message)
-        self._send(data)
+        send_api(self.token, self.channel, data)
 
     def post(self, branch: str, info: Dict[str, str]) -> None:
         data = build_runs(self.name, branch, info, self.warnings if self.warnings else None)
-        self._send(data)
+        send_api(self.token, self.channel, data)
         self.warnings.clear()
 
     def post_warnings(self) -> None:
@@ -210,7 +185,7 @@ class SlackOutput:
         res = Response(f"Warnings for {self.name}")
         for key in sorted(self.warnings):
             res.add(TextBlock(f":warning: {self.warnings[key]}"))
-        self._send(res)
+        send_api(self.token, self.channel, res)
         self.warnings.clear()
 
 

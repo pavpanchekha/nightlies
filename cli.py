@@ -21,6 +21,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import webbrowser
 
 
 ## Setup & config file
@@ -501,12 +502,12 @@ def fetch_published_report(
     client_config: ClientConfig,
     repo: str,
     entry: LogEntry,
-) -> tuple[str, Manifest]:
+) -> str:
     log_text = client_config.fetch(entry.url)
     report_url = find_report_url_in_log(repo, log_text)
     if report_url is None:
         raise CliError("No published report found in log.")
-    return report_url, fetch_manifest(client_config, report_url)
+    return report_url
 
 
 def fetch_manifest(client_config: ClientConfig, report_url: str) -> Manifest:
@@ -717,7 +718,8 @@ def cmd_download(client_config: ClientConfig, repo: str, selector: RunSelector) 
     if run_log is None:
         raise CliError("No matching log found.")
 
-    report_url, manifest = fetch_published_report(client_config, repo, run_log.entry)
+    report_url = fetch_published_report(client_config, repo, run_log.entry)
+    manifest = fetch_manifest(client_config, report_url)
     output_dir = Path(urllib.parse.urlsplit(report_url).path.rstrip("/")).name
     file_count = download_report_files(report_url, manifest.files, Path(output_dir), client_config)
     print(f"Downloaded {file_count} files to {output_dir}/")
@@ -769,6 +771,16 @@ def cmd_status(client_config: ClientConfig, repo: str, selector: RunSelector) ->
     return 0
 
 
+def cmd_open(client_config: ClientConfig, repo: str, selector: RunSelector) -> int:
+    run_log = next(matching_run_logs(iter_entries(client_config), repo, selector), None)
+    if run_log is None:
+        raise CliError("No matching log found.")
+    url = urllib.parse.urljoin(client_config.index_url, fetch_published_report(client_config, repo, run_log.entry))
+    if not webbrowser.open_new(url):
+        raise CliError(f"could not open browser for {url}")
+    return 0
+
+
 ## Main method and flag handling
 
 def normalize_time(value: str | None) -> str | None:
@@ -811,6 +823,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     download_parser = subparsers.add_parser("download", help="Download a published report for a repo branch run.")
     add_run_selector_args(download_parser)
+
+    open_parser = subparsers.add_parser("open", help="Open a published report for a repo branch run in a browser.")
+    add_run_selector_args(open_parser)
     return parser
 
 
@@ -824,7 +839,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "sync":
             return cmd_sync(client_config)
         repo = infer_repo(".")
-        if args.command in {"log", "start", "status"} and args.branch is None:
+        if args.command in {"log", "start", "status", "open"} and args.branch is None:
             args.branch = current_branch(".")
         if args.command == "start":
             return cmd_start(client_config, repo, args.branch)
@@ -837,6 +852,8 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_status(client_config, repo, selector)
         if args.command == "download":
             return cmd_download(client_config, repo, selector)
+        if args.command == "open":
+            return cmd_open(client_config, repo, selector)
         raise CliError(f"unknown command {args.command}")
     except (MissingClientConfig, InvalidClientConfig) as exc:
         print(f"error: {exc}. Run `cli setup <url>` to fix.", file=sys.stderr)

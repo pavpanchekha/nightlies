@@ -503,6 +503,67 @@ class TestCli(unittest.TestCase):
             "No report (run is too old). Run `uvx nightlies log` to view log details\n",
         )
 
+    def test_cmd_open_opens_published_report(self) -> None:
+        report_name = "1713625200:taylor-order0:deadbeef"
+        client_config = self.client_config()
+        report_url = self.report_url(client_config, "herbie/" + report_name)
+        entry = cli.LogEntry(
+            name="2026-04-20-150000-1-herbie-taylor-order0.log",
+            url="/logs/taylor-order0.log",
+        )
+        opener = FakeOpener(
+            {
+                self.absolute_url(client_config, entry.url): (
+                    "Publishing report directory /tmp/report to "
+                    f"/srv/reports/herbie/{report_name}\n"
+                ).encode("utf-8"),
+            }
+        )
+
+        with (
+            self.client_open_patch(opener),
+            mock.patch.object(cli, "iter_entries", return_value=iter([entry])),
+            mock.patch.object(cli.webbrowser, "open_new", return_value=True) as open_new,
+        ):
+            rc = cli.cmd_open(
+                client_config,
+                "herbie",
+                cli.RunSelector("taylor-order0", "2026-04-20", "15:00:00"),
+            )
+
+        self.assertEqual(rc, 0)
+        open_new.assert_called_once_with(report_url)
+
+    def test_main_open_without_branch_defaults_to_current_branch(self) -> None:
+        report_name = "1713570003:feature:decafbad"
+        client_config = self.client_config()
+        report_url = self.report_url(client_config, "herbie/" + report_name)
+        entry = cli.LogEntry(
+            name="2026-04-21-150000-1-herbie-feature.log",
+            url="/logs/feature.log",
+        )
+        opener = FakeOpener(
+            {
+                self.absolute_url(client_config, entry.url): (
+                    "Publishing report directory /tmp/report to "
+                    f"/srv/reports/herbie/{report_name}\n"
+                ).encode("utf-8"),
+            }
+        )
+
+        with (
+            self.client_open_patch(opener),
+            mock.patch.object(cli, "load_client_config", return_value=client_config),
+            mock.patch.object(cli, "infer_repo", return_value="herbie"),
+            mock.patch.object(cli, "current_branch", return_value="feature"),
+            mock.patch.object(cli, "iter_entries", return_value=iter([entry])),
+            mock.patch.object(cli.webbrowser, "open_new", return_value=True) as open_new,
+        ):
+            rc = cli.main(["open"])
+
+        self.assertEqual(rc, 0)
+        open_new.assert_called_once_with(report_url)
+
 
     def test_cmd_setup_saves_client_config(self) -> None:
         state = cli.IndexState(False, [cli.StartTarget("herbie", "main", False)])
