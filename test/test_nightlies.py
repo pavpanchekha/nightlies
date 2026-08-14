@@ -29,6 +29,7 @@ if str(ROOT) not in sys.path:
 from nightlies import NightlyRunner
 import apt
 import cli
+import runner
 
 
 class FakeRunner:
@@ -1503,6 +1504,43 @@ class TestServerRunNow(unittest.TestCase):
         self.assertEqual(ctx.exception.body, "Job nightly:testrepo:feature_2ftest already queued")
         repo_state.read.assert_called_once_with()
         run_nightlies.assert_not_called()
+
+
+class TestBranchRunner(unittest.TestCase):
+    def test_setup_failure_posts_to_slack(self) -> None:
+        slack_output = mock.Mock()
+        bc = SimpleNamespace(
+            config=SimpleNamespace(secrets=configparser.ConfigParser()),
+            slack_spec="workspace/channel",
+            repo_name="testrepo",
+            branch_name="main",
+            branch_dir=Path("/tmp/testrepo/main"),
+            base_url="https://nightly.example/",
+            warn_branch=None,
+            warn_log=None,
+            logs_dir=Path("/tmp"),
+        )
+
+        with (
+            mock.patch.object(runner.slack, "make_output", return_value=slack_output),
+            mock.patch.object(
+                runner,
+                "run",
+                side_effect=[
+                    subprocess.CompletedProcess(["git"], 0),
+                    subprocess.CalledProcessError(128, ["git", "submodule", "update"]),
+                ],
+            ),
+        ):
+            rc = runner.run_branch(cast(Any, bc), "setup-failure.log")
+
+        self.assertEqual(rc, 1)
+        slack_output.post.assert_called_once()
+        branch, info = slack_output.post.call_args.args
+        self.assertEqual(branch, "main")
+        self.assertEqual(info["result"], "*failure*")
+        self.assertEqual(info["logurl"], "https://nightly.example/logs/setup-failure.log")
+        self.assertNotIn("time", info)
 
 
 if __name__ == "__main__":

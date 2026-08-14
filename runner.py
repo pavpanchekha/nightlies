@@ -144,6 +144,7 @@ def run_branch(bc: config.BranchConfig, log_name: str) -> int:
     info: Dict[str, str] = {}
     slack_output = slack.make_output(bc.config.secrets, bc.slack_spec, bc.repo_name)
     start: Optional[datetime] = None
+    out: Optional[str] = None
 
     if bc.base_url:
         import urllib.parse
@@ -164,19 +165,19 @@ def run_branch(bc: config.BranchConfig, log_name: str) -> int:
 
     signal.signal(signal.SIGTERM, handle_sigterm)
 
-    run(["git", "-C", bc.branch_dir, "reset", "--hard", f"origin/{bc.branch_name}"], check=True)
-    run(["git", "-C", bc.branch_dir, "submodule", "update", "--init", "--recursive", "--force"], check=True)
-
-    out = run(
-        ["git", "-C", bc.branch_dir, "rev-parse", f"origin/{bc.branch_name}"],
-        capture_output=True, check=True
-    ).stdout.decode("ascii").strip()
-
-    start = datetime.now(timezone.utc)
     try:
+        run(["git", "-C", bc.branch_dir, "reset", "--hard", f"origin/{bc.branch_name}"], check=True)
+        run(["git", "-C", bc.branch_dir, "submodule", "update", "--init", "--recursive", "--force"], check=True)
+
+        out = run(
+            ["git", "-C", bc.branch_dir, "rev-parse", f"origin/{bc.branch_name}"],
+            capture_output=True, check=True
+        ).stdout.decode("ascii").strip()
+
+        start = datetime.now(timezone.utc)
         to = parse_time(bc.timeout)
         cmd = ["make", "-C", str(bc.branch_dir), "nightly"]
-        
+
         if bc.report_dir:
             if bc.report_dir.exists():
                 shutil.rmtree(bc.report_dir, ignore_errors=True)
@@ -195,66 +196,68 @@ def run_branch(bc: config.BranchConfig, log_name: str) -> int:
         log(f"Successfully ran on branch {bc.branch_name}")
         status = "success"
 
-    metadata = read_metadata(bc.metadata_file)
-    metadata["commit"] = out
-    metadata["time"] = time.time()
-    save_metadata(bc.metadata_file, metadata)
+    if start is not None:
+        assert out is not None
+        metadata = read_metadata(bc.metadata_file)
+        metadata["commit"] = out
+        metadata["time"] = time.time()
+        save_metadata(bc.metadata_file, metadata)
 
-    if bc.report_dir and bc.report_dir.exists():
-        try:
-            compressed: set[Path] = set()
-            if bc.gzip:
-                log(f"GZipping all {bc.gzip} files")
-                compressed = gzip_matching_files(bc.report_dir, shlex.split(bc.gzip))
+        if bc.report_dir and bc.report_dir.exists():
+            try:
+                compressed: set[Path] = set()
+                if bc.gzip:
+                    log(f"GZipping all {bc.gzip} files")
+                    compressed = gzip_matching_files(bc.report_dir, shlex.split(bc.gzip))
 
-            total, biggest, _ = tree_size(bc.report_dir)
-            if bc.warn_report and total > bc.warn_report:
-                msg = (
-                    f"Report size {format_size(total)} exceeds limit {format_size(bc.warn_report)}"
-                    f"; largest file `{biggest}`"
-                )
-                log(f"Report `{bc.branch_name}` is {format_size(total)}; largest file `{biggest}`")
+                total, biggest, _ = tree_size(bc.report_dir)
+                if bc.warn_report and total > bc.warn_report:
+                    msg = (
+                        f"Report size {format_size(total)} exceeds limit {format_size(bc.warn_report)}"
+                        f"; largest file `{biggest}`"
+                    )
+                    log(f"Report `{bc.branch_name}` is {format_size(total)}; largest file `{biggest}`")
+                    if slack_output:
+                        slack_output.warn("report-size", msg)
+
+                if "url" not in info and bc.base_url:
+                    name = f"{int(time.time())}:{bc.branch_filename}:{out[:8]}"
+                    dest_dir = bc.reports_dir / bc.repo_name / name
+                    report_url = bc.base_url + "reports/" + bc.repo_name + "/" + name
+
+                    if bc.report_dir.exists():
+                        image_url = None
+                        if bc.image_file and bc.image_file.exists():
+                            path = bc.image_file.relative_to(bc.report_dir)
+                            image_url = report_url + "/" + str(path)
+                        if status == "success":
+                            write_nightly_info(
+                                bc,
+                                commit=out,
+                                status=status,
+                                started_at=start,
+                                finished_at=datetime.now(timezone.utc),
+                                log=log_name,
+                                log_url=bc.base_url + "logs/" + urllib.parse.quote(log_name),
+                                report_url=report_url,
+                                image_url=image_url,
+                                compressed=compressed,
+                            )
+                        log(f"Publishing report directory {bc.report_dir} to {dest_dir}")
+                        copything(bc.report_dir, dest_dir)
+                        info["url"] = report_url
+                        if bc.image_file and bc.image_file.exists():
+                            log(f"Linking image file {bc.image_file}")
+                            assert image_url is not None
+                            info["img"] = image_url
+                        shutil.rmtree(bc.report_dir, ignore_errors=True)
+                    else:
+                        log(f"Report directory {bc.report_dir} does not exist")
+            except OSError as e:
+                msg = f"Error saving report: {e}"
+                log(f"Error saving report for `{bc.branch_name}`: {e}")
                 if slack_output:
-                    slack_output.warn("report-size", msg)
-
-            if "url" not in info and bc.base_url:
-                name = f"{int(time.time())}:{bc.branch_filename}:{out[:8]}"
-                dest_dir = bc.reports_dir / bc.repo_name / name
-                report_url = bc.base_url + "reports/" + bc.repo_name + "/" + name
-
-                if bc.report_dir.exists():
-                    image_url = None
-                    if bc.image_file and bc.image_file.exists():
-                        path = bc.image_file.relative_to(bc.report_dir)
-                        image_url = report_url + "/" + str(path)
-                    if status == "success":
-                        write_nightly_info(
-                            bc,
-                            commit=out,
-                            status=status,
-                            started_at=start,
-                            finished_at=datetime.now(timezone.utc),
-                            log=log_name,
-                            log_url=bc.base_url + "logs/" + urllib.parse.quote(log_name),
-                            report_url=report_url,
-                            image_url=image_url,
-                            compressed=compressed,
-                        )
-                    log(f"Publishing report directory {bc.report_dir} to {dest_dir}")
-                    copything(bc.report_dir, dest_dir)
-                    info["url"] = report_url
-                    if bc.image_file and bc.image_file.exists():
-                        log(f"Linking image file {bc.image_file}")
-                        assert image_url is not None
-                        info["img"] = image_url
-                    shutil.rmtree(bc.report_dir, ignore_errors=True)
-                else:
-                    log(f"Report directory {bc.report_dir} does not exist")
-        except OSError as e:
-            msg = f"Error saving report: {e}"
-            log(f"Error saving report for `{bc.branch_name}`: {e}")
-            if slack_output:
-                slack_output.warn("broken-report", msg)
+                    slack_output.warn("broken-report", msg)
 
     total, biggest, _ = tree_size(bc.branch_dir)
     if bc.warn_branch and total > bc.warn_branch:
@@ -277,7 +280,8 @@ def run_branch(bc: config.BranchConfig, log_name: str) -> int:
             slack_output.warn("log-size", msg)
 
     info["result"] = f"*{status}*" if status != "success" else "success"
-    info["time"] = format_time((datetime.now(timezone.utc) - start).total_seconds())
+    if start is not None:
+        info["time"] = format_time((datetime.now(timezone.utc) - start).total_seconds())
 
     if slack_output:
         log("Posting results of run to slack!")
