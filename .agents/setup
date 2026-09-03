@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+echo "Installing system test dependencies..."
+packages=(libdbus-1-dev libglib2.0-dev)
+missing=()
+for package in "${packages[@]}"; do
+    if ! dpkg-query -W -f='${Status}' "$package" 2>/dev/null | grep -Fq 'install ok installed'; then
+        missing+=("$package")
+    fi
+done
+if ((${#missing[@]})); then
+    sudo apt-get update
+    sudo apt-get install -y "${missing[@]}"
+fi
+
+echo "Configuring Git for ephemeral test repositories..."
+git config --global commit.gpgsign false
+
+echo "Installing uv if needed..."
+export PATH="$HOME/.local/bin:$PATH"
+if ! command -v uv >/dev/null; then
+    curl -LsSf https://astral.sh/uv/install.sh |
+        env UV_INSTALL_DIR="$HOME/.local/bin" UV_NO_MODIFY_PATH=1 sh
+fi
+
+echo "Installing the pinned Python toolchain..."
+uv python install "$(cat .python-version)"
+
+echo "Installing locked project dependencies..."
+uv sync --locked
