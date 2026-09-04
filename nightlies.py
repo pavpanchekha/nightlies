@@ -8,7 +8,7 @@ import configparser
 import json
 import shlex, shutil
 import slack, apt
-from config import parse_cores, parse_size, format_size_slurm, short_repo_name
+from config import parse_cores, parse_size, format_size_slurm, repo_to_url, short_repo_name
 import urllib.request, urllib.error
 
 def format_cmd(s : Sequence[Union[str, Path]]) -> str:
@@ -19,9 +19,6 @@ def format_cmd(s : Sequence[Union[str, Path]]) -> str:
             str(part) if " " not in str(part) else '"{}"'.format(part)
             for part in s
         ])
-
-def repo_to_url(repo : str) -> str:
-    return "git@github.com:" + repo + ".git"
 
 SBATCH_BASE = [
     "sbatch",
@@ -298,7 +295,7 @@ class Repository:
             self.url = self.config["url"]
             self.gh_name : Optional[str] = None
         else:
-            self.url = "git@github.com:" + name + ".git"
+            self.url = repo_to_url(name)
             self.gh_name = name
 
         self.name = short_repo_name(name)

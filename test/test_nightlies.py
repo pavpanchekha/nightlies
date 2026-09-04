@@ -29,6 +29,7 @@ if str(ROOT) not in sys.path:
 from nightlies import NightlyRunner
 import apt
 import cli
+import config
 import runner
 
 
@@ -1247,6 +1248,51 @@ class TestNightlyRunnerHarness(unittest.TestCase):
         self.assertIn('"commit"', contents)
         self.assertIn('"time"', contents)
 
+    def test_northflank_runner_clones_and_runs_requested_commit(self) -> None:
+        self.makefile(
+            "add successful nightly target",
+            ["test -f sub1/sub.txt", "echo northflank-ok"],
+        )
+        self.git(
+            [
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "add",
+                str(self.subrepo_dir),
+                "sub1",
+            ],
+            repo=self.work_dir,
+        )
+        self.git(["commit", "-m", "add submodule"], repo=self.work_dir)
+        requested_commit = subprocess.run(
+            ["git", "-C", str(self.work_dir), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        self.git(["push", "origin", "main"], repo=self.work_dir)
+
+        self.makefile("replace with failing nightly target", ["false"])
+        self.git(["push", "origin", "main"], repo=self.work_dir)
+
+        env = os.environ.copy()
+        env["NIGHTLIES_REPO"] = self.remote_dir.as_uri()
+        env["NIGHTLIES_COMMIT"] = requested_commit
+        result = subprocess.run(
+            ["python3", "runner.py", "--mode", "northflank"],
+            cwd=str(Path(__file__).resolve().parent.parent),
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+
+        self.assertEqual(result.returncode, 0, msg=result.stdout + "\n" + result.stderr)
+        self.assertIn("northflank-ok", result.stdout)
+        self.assertIn(f"fetch --depth=1 --filter=blob:none origin {requested_commit}", result.stdout)
+        self.assertIn(f"reset --hard {requested_commit}", result.stdout)
+        self.assertIn("submodule update --init --recursive --force --depth=1", result.stdout)
+
     def test_dryrun_rejects_when_sync_is_running(self) -> None:
         self.write_config(repo_updates={})
         self.pid_file.write_text(
@@ -1507,13 +1553,29 @@ class TestServerRunNow(unittest.TestCase):
 
 
 class TestBranchRunner(unittest.TestCase):
+    def test_repo_to_url(self) -> None:
+        self.assertEqual(
+            config.repo_to_url("owner/repo"),
+            "git@github.com:owner/repo.git",
+        )
+        self.assertEqual(
+            config.repo_to_url("owner/repo", protocol="https"),
+            "https://github.com/owner/repo.git",
+        )
+        self.assertEqual(
+            config.repo_to_url("https://example.com/repo.git", protocol="https"),
+            "https://example.com/repo.git",
+        )
+
     def test_setup_failure_posts_to_slack(self) -> None:
         slack_output = mock.Mock()
         bc = SimpleNamespace(
-            config=SimpleNamespace(secrets=configparser.ConfigParser()),
+            secrets=configparser.ConfigParser(),
             slack_spec="workspace/channel",
             repo_name="testrepo",
             branch_name="main",
+            revision="origin/main",
+            shallow=False,
             branch_dir=Path("/tmp/testrepo/main"),
             base_url="https://nightly.example/",
             warn_branch=None,
@@ -1530,11 +1592,27 @@ class TestBranchRunner(unittest.TestCase):
                     subprocess.CompletedProcess(["git"], 0),
                     subprocess.CalledProcessError(128, ["git", "submodule", "update"]),
                 ],
-            ),
+            ) as run_mock,
         ):
             rc = runner.run_branch(cast(Any, bc), "setup-failure.log")
 
         self.assertEqual(rc, 1)
+        self.assertEqual(
+            run_mock.call_args_list,
+            [
+                mock.call(
+                    ["git", "-C", Path("/tmp/testrepo/main"), "reset", "--hard", "origin/main"],
+                    check=True,
+                ),
+                mock.call(
+                    [
+                        "git", "-C", Path("/tmp/testrepo/main"), "submodule", "update",
+                        "--init", "--recursive", "--force",
+                    ],
+                    check=True,
+                ),
+            ],
+        )
         slack_output.post.assert_called_once()
         branch, info = slack_output.post.call_args.args
         self.assertEqual(branch, "main")

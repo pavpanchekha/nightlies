@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-from typing import Dict, Optional
+from typing import Dict
 from pathlib import Path
 import configparser
 
@@ -40,6 +40,17 @@ def short_repo_name(repo_name: str) -> str:
     return repo_name.split("/")[-1]
 
 
+def repo_to_url(repo: str, protocol: str = "ssh") -> str:
+    if protocol == "ssh":
+        return f"git@github.com:{repo}.git"
+    elif protocol == "https":
+        if "://" in repo or repo.startswith("git@"):
+            return repo
+        return f"https://github.com/{repo}.git"
+    else:
+        raise ValueError(f"Unknown GitHub protocol {protocol}")
+
+
 def parse_size(size: str | None) -> int | None:
     if size is None:
         return size
@@ -69,11 +80,20 @@ def parse_cores(cores: str | None) -> int | None:
 
 
 class BranchConfig:
-    def __init__(self, config: Config, repo_name: str, branch_name: str):
+    def __init__(
+        self,
+        config: Config,
+        repo_name: str,
+        branch_name: str,
+        revision: str | None = None,
+    ):
         self.config = config
+        self.secrets = config.secrets
         self.repo_name = short_repo_name(repo_name)
         self.branch_name = branch_name
         self.branch_filename = escape_branch_filename(branch_name)
+        self.revision = revision or f"origin/{branch_name}"
+        self.shallow = False
         
         repo_config = config.get_repo_config(repo_name)
         
@@ -97,3 +117,31 @@ class BranchConfig:
         self.reports_dir = config.reports_dir
         self.logs_dir = config.logs_dir
         self.slack_spec = repo_config.get("slack")
+
+    @classmethod
+    def northflank(cls, repo_name: str, commit: str, root: Path) -> "BranchConfig":
+        self = cls.__new__(cls)
+        self.secrets = configparser.ConfigParser()
+        self.repo_name = short_repo_name(repo_name).removesuffix(".git")
+        self.branch_name = commit
+        self.branch_filename = escape_branch_filename(commit)
+        self.revision = commit
+        self.shallow = True
+
+        self.repo_dir = root / self.repo_name
+        self.branch_dir = self.repo_dir / self.branch_filename
+        self.metadata_file = self.repo_dir / (self.branch_filename + ".json")
+
+        self.report_dir = None
+        self.image_file = None
+        self.timeout = None
+        self.gzip = ""
+        self.warn_log = None
+        self.warn_report = None
+        self.warn_branch = None
+
+        self.base_url = None
+        self.reports_dir = root / "reports"
+        self.logs_dir = root / "logs"
+        self.slack_spec = None
+        return self
