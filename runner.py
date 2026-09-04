@@ -337,20 +337,23 @@ def main() -> int:
     if any(arg is not None for arg in runner_args):
         parser.error("northflank mode does not take positional arguments")
     repo = os.environ.get("NIGHTLIES_REPO")
+    branch = os.environ.get("NIGHTLIES_BRANCH")
     commit = os.environ.get("NIGHTLIES_COMMIT")
-    if not repo or not commit:
-        parser.error("northflank mode requires NIGHTLIES_REPO and NIGHTLIES_COMMIT")
+    if not repo or not branch or not commit:
+        parser.error(
+            "northflank mode requires NIGHTLIES_REPO, NIGHTLIES_BRANCH, and NIGHTLIES_COMMIT"
+        )
 
     with tempfile.TemporaryDirectory(prefix="nightlies-") as directory:
-        bc = config.BranchConfig.northflank(repo, commit, Path(directory))
+        bc = config.BranchConfig.northflank(repo, branch, commit, Path(directory))
         bc.repo_dir.mkdir(parents=True)
-        run(["git", "init", bc.branch_dir], check=True)
+        run(["git", "init", "--quiet", f"--initial-branch={branch}", bc.branch_dir], check=True)
         run([
             "git", "-C", bc.branch_dir, "remote", "add", "origin",
             config.repo_to_url(repo, protocol="https"),
         ], check=True)
         run([
-            "git", "-C", bc.branch_dir, "fetch", "--depth=1", "--filter=blob:none", "origin", commit,
+            "git", "-C", bc.branch_dir, "fetch", "--quiet", "--depth=1", "origin", commit,
         ], check=True)
         return run_branch(bc, None)
 

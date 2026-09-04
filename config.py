@@ -119,12 +119,18 @@ class BranchConfig:
         self.slack_spec = repo_config.get("slack")
 
     @classmethod
-    def northflank(cls, repo_name: str, commit: str, root: Path) -> "BranchConfig":
+    def northflank(
+        cls,
+        repo_name: str,
+        branch_name: str,
+        commit: str,
+        root: Path,
+    ) -> "BranchConfig":
         self = cls.__new__(cls)
         self.secrets = configparser.ConfigParser()
         self.repo_name = short_repo_name(repo_name).removesuffix(".git")
-        self.branch_name = commit
-        self.branch_filename = escape_branch_filename(commit)
+        self.branch_name = branch_name
+        self.branch_filename = escape_branch_filename(branch_name)
         self.revision = commit
         self.shallow = True
 

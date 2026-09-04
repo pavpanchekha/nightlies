@@ -1251,7 +1251,11 @@ class TestNightlyRunnerHarness(unittest.TestCase):
     def test_northflank_runner_clones_and_runs_requested_commit(self) -> None:
         self.makefile(
             "add successful nightly target",
-            ["test -f sub1/sub.txt", "echo northflank-ok"],
+            [
+                "test -f sub1/sub.txt",
+                "test \"$$(git rev-parse --abbrev-ref HEAD)\" = feature/test",
+                "echo northflank-ok",
+            ],
         )
         self.git(
             [
@@ -1278,6 +1282,7 @@ class TestNightlyRunnerHarness(unittest.TestCase):
 
         env = os.environ.copy()
         env["NIGHTLIES_REPO"] = self.remote_dir.as_uri()
+        env["NIGHTLIES_BRANCH"] = "feature/test"
         env["NIGHTLIES_COMMIT"] = requested_commit
         result = subprocess.run(
             ["python3", "runner.py", "--mode", "northflank"],
@@ -1289,7 +1294,8 @@ class TestNightlyRunnerHarness(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, msg=result.stdout + "\n" + result.stderr)
         self.assertIn("northflank-ok", result.stdout)
-        self.assertIn(f"fetch --depth=1 --filter=blob:none origin {requested_commit}", result.stdout)
+        self.assertIn("git init --quiet --initial-branch=feature/test", result.stdout)
+        self.assertIn(f"fetch --quiet --depth=1 origin {requested_commit}", result.stdout)
         self.assertIn(f"reset --hard {requested_commit}", result.stdout)
         self.assertIn("submodule update --init --recursive --force --depth=1", result.stdout)
 
