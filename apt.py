@@ -1,12 +1,21 @@
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Sequence, TYPE_CHECKING
+from typing import List, Protocol, Sequence
 import subprocess
 
-if TYPE_CHECKING:
-    import nightlies
-
 import re
+
+
+class AptRunner(Protocol):
+    dryrun: bool
+
+    def log(self, level: int, message: str) -> None: ...
+
+    def exec(
+        self,
+        level: int,
+        cmd: Sequence[str | Path],
+    ) -> subprocess.CompletedProcess[bytes]: ...
 
 APT_LINE_RE = re.compile(r"^(\d+) upgraded, (\d+) newly installed, (\d+) to remove and (\d+) not upgraded\.$", re.MULTILINE)
 APT_INST_RE = re.compile(r"^Inst (\S+)(?: \[([^\]]+)\])? \(([^)]+)\)")
@@ -63,7 +72,7 @@ def _has_repository(
     return False
 
 
-def add_repositories(runner: "nightlies.NightlyRunner", repos: Sequence[str]) -> List[str]:
+def add_repositories(runner: AptRunner, repos: Sequence[str]) -> List[str]:
     failed: List[str] = []
     for repo in repos:
         if _has_repository(repo):
@@ -104,7 +113,7 @@ def _parse_updates(stdout: str) -> List[AptPackageUpdate]:
     return updates
 
 
-def check_updates(runner : "nightlies.NightlyRunner", pkgs : List[str]) -> List[AptPackageUpdate]:
+def check_updates(runner: AptRunner, pkgs: List[str]) -> List[AptPackageUpdate]:
     runner.log(1, f"Checking for updates to apt packages {' '.join(pkgs)}")
     stdout = runner.exec(2, ["sudo", "apt", "install", "--dry-run"] + pkgs).stdout.decode("latin1")
 
@@ -122,6 +131,6 @@ def check_updates(runner : "nightlies.NightlyRunner", pkgs : List[str]) -> List[
         raise IOError("apt: Could not parse package updates from `apt` results")
     return updates
 
-def install(runner : "nightlies.NightlyRunner", pkgs : List[str]) -> None:
+def install(runner: AptRunner, pkgs: List[str]) -> None:
     runner.log(1, f"Installing apt packages {' '.join(pkgs)}")
     runner.exec(2, ["sudo", "apt", "install", "--yes"] + pkgs)

@@ -6,7 +6,7 @@ from pathlib import Path
 import argparse, gzip, json, shlex, shutil, subprocess, sys, tempfile, time
 import signal
 import os
-import config, slack
+import apt, config, slack
 
 def log(msg: str) -> None:
     print(msg, flush=True)
@@ -26,6 +26,36 @@ def format_cmd(s: Sequence[str | Path]) -> str:
 def run(cmd: Sequence[str | Path], **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
     log(f"Executing {format_cmd(cmd)}")
     return subprocess.run(cmd, **kwargs)
+
+
+class NorthflankAptRunner:
+    dryrun = False
+
+    def log(self, level: int, msg: str) -> None:
+        log(msg)
+
+    def exec(
+        self,
+        level: int,
+        cmd: Sequence[str | Path],
+    ) -> subprocess.CompletedProcess[bytes]:
+        actual_cmd = list(cmd)
+        if os.geteuid() == 0 and actual_cmd[0] == "sudo":
+            actual_cmd = actual_cmd[1:]
+        if "--dry-run" in actual_cmd:
+            return run(actual_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=True)
+        return run(actual_cmd, check=True)
+
+
+def install_apt_dependencies(ppas: List[str], packages: List[str]) -> None:
+    apt_runner = NorthflankAptRunner()
+    failed_ppas = apt.add_repositories(apt_runner, ppas)
+    if failed_ppas:
+        raise RuntimeError(f"Failed to add apt repositories: {', '.join(failed_ppas)}")
+    if packages:
+        updates = apt.check_updates(apt_runner, packages)
+        if updates:
+            apt.install(apt_runner, packages)
 
 def parse_time(to: str | None) -> float | None:
     if to is None:
@@ -344,8 +374,15 @@ def main() -> int:
             "northflank mode requires NIGHTLIES_REPO, NIGHTLIES_BRANCH, and NIGHTLIES_COMMIT"
         )
 
+    timeout = os.environ.get("NIGHTLIES_TIMEOUT")
+    ppas = os.environ.get("NIGHTLIES_PPA", "").split()
+    packages = os.environ.get("NIGHTLIES_APT", "").split()
+    install_apt_dependencies(ppas, packages)
+
     with tempfile.TemporaryDirectory(prefix="nightlies-") as directory:
-        bc = config.BranchConfig.northflank(repo, branch, commit, Path(directory))
+        bc = config.BranchConfig.northflank(
+            repo, branch, commit, Path(directory), timeout=timeout,
+        )
         bc.repo_dir.mkdir(parents=True)
         run(["git", "init", "--quiet", f"--initial-branch={branch}", bc.branch_dir], check=True)
         run([

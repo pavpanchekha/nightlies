@@ -125,6 +125,7 @@ class BranchConfig:
         branch_name: str,
         commit: str,
         root: Path,
+        timeout: str | None = None,
     ) -> "BranchConfig":
         self = cls.__new__(cls)
         self.secrets = configparser.ConfigParser()
@@ -140,7 +141,7 @@ class BranchConfig:
 
         self.report_dir = None
         self.image_file = None
-        self.timeout = None
+        self.timeout = timeout
         self.gzip = ""
         self.warn_log = None
         self.warn_report = None
