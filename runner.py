@@ -42,6 +42,10 @@ class NorthflankAptRunner:
         actual_cmd = list(cmd)
         if os.geteuid() == 0 and actual_cmd[0] == "sudo":
             actual_cmd = actual_cmd[1:]
+        if actual_cmd[0] == "apt":
+            actual_cmd[1:1] = [
+                "-o", "Dir::State::extended_states=/dev/shm/apt-state/extended_states",
+            ]
         if "--dry-run" in actual_cmd:
             return run(actual_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=True)
         return run(actual_cmd, check=True)

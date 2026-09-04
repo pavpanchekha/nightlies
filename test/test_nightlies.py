@@ -1596,7 +1596,14 @@ class TestBranchRunner(unittest.TestCase):
             apt_runner.exec(2, ["sudo", "apt", "install", "--yes", "racket"])
 
         run.assert_called_once_with(
-            ["apt", "install", "--yes", "racket"],
+            [
+                "apt",
+                "-o",
+                "Dir::State::extended_states=/dev/shm/apt-state/extended_states",
+                "install",
+                "--yes",
+                "racket",
+            ],
             check=True,
         )
 
