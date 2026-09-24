@@ -174,6 +174,33 @@ class TestNorthflank(unittest.TestCase):
         )
 
 
+class TestRepository(unittest.TestCase):
+    def test_list_pr_branches_maps_forks_to_pull_refs(self) -> None:
+        runner = FakeRunner()
+        runner.dir = Path("/tmp/nightlies-test")
+        runner.secrets = configparser.ConfigParser()
+        runner.northflank = None
+        conf = configparser.ConfigParser()
+        conf["owner/repo"] = {}
+        repo = nightlies.Repository(cast(NightlyRunner, runner), "owner/repo", conf["owner/repo"])
+
+        def pull(number: int, head_repo: str, head_ref: str) -> dict[str, Any]:
+            return {
+                "number": number,
+                "head": {"repo": {"full_name": head_repo}, "ref": head_ref},
+            }
+
+        response = FakeResponse(json.dumps([
+            pull(1, "owner/repo", "feature"),
+            pull(2, "contributor/repo", "feature"),
+        ]).encode())
+        with mock.patch.object(nightlies.urllib.request, "urlopen", return_value=response):
+            branches = repo.list_pr_branches()
+
+        self.assertEqual(branches, {"feature": 1, "pr/2": 2})
+        self.assertEqual(runner.commands, [])
+
+
 class TestCli(unittest.TestCase):
     def setUp(self) -> None:
         self.tmpdir = Path(tempfile.mkdtemp(prefix="cli-test-"))
@@ -1050,6 +1077,27 @@ class TestNightlyRunnerHarness(unittest.TestCase):
         third = self.nightly()
         self.assertEqual(third, ["feature/test"])
 
+    def test_fork_pull_request_gets_scheduled(self) -> None:
+        self.git(["checkout", "-b", "fork-feature"], repo=self.work_dir)
+        self.commit(self.work_dir, "fork.txt", "from a fork\n", "fork pull request")
+        self.git(["push", "origin", "HEAD:refs/pull/17/head"], repo=self.work_dir)
+        self.git(["checkout", "main"], repo=self.work_dir)
+
+        response = FakeResponse(json.dumps([
+            {
+                "number": 17,
+                "head": {"repo": {"full_name": "contributor/testrepo"}, "ref": "fork-feature"},
+                "base": {"repo": {"full_name": "owner/testrepo"}},
+            },
+        ]).encode())
+        with mock.patch.object(nightlies.urllib.request, "urlopen", return_value=response):
+            ran = self.nightly(github_name="owner/testrepo")
+
+        self.assertEqual(ran, ["main", "pr/17"])
+        branch_dir = self.repos_dir / "testrepo" / "pr_2f17"
+        self.assertEqual((branch_dir / "fork.txt").read_text(), "from a fork\n")
+        self.assertIn('"pr": 17', (self.repos_dir / "testrepo" / "pr_2f17.json").read_text())
+
     def test_nr_dryrun_baseline(self) -> None:
         first = self.nightly(repo_updates={"baseline": "main"}, complete=True)
         self.assertEqual(first, ["main"])
@@ -1543,12 +1591,15 @@ class TestNightlyRunnerHarness(unittest.TestCase):
         repo_updates: dict[str, str] | None = None,
         default_updates: dict[str, str] | None = None,
         complete: bool = False,
+        github_name: str | None = None,
     ) -> list[str]:
         if repo_updates is not None or default_updates is not None or not self.config_file.exists():
             self.write_config(repo_updates or {}, default_updates)
 
         runner = NightlyRunner(str(self.config_file))
         runner.load()
+        if github_name is not None:
+            runner.repos[0].gh_name = github_name
         old_cwd, _ = self.with_cwd(self.tmpdir)
         try:
             runner.run()
