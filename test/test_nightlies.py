@@ -1515,6 +1515,14 @@ class TestNightlyRunnerHarness(unittest.TestCase):
         runner.load()
         self.assertEqual(runner.base_url, "https://nightlies.example/")
 
+    def test_invalid_slack_config_does_not_prevent_load(self) -> None:
+        self.write_config(repo_updates={"slack": "foo"})
+        runner = NightlyRunner(str(self.config_file))
+        runner.load()
+        self.assertIsNotNone(runner.repos[0].slack)
+        assert runner.repos[0].slack is not None
+        self.assertEqual(runner.repos[0].slack.error, "Invalid Slack spec: 'foo'")
+
     def write_config(
         self,
         repo_updates: dict[str, str],
