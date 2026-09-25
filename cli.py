@@ -31,6 +31,9 @@ LOG_PAGE_SIZE = 10
 REPORTS_PATH = "/reports/"
 SYNC_PATH = "/dryrun"
 START_PATH = "/runnow"
+SYNC_POLL_INTERVAL = 1.0
+SYNC_START_TIMEOUT = 10.0
+SYNC_FINISH_TIMEOUT = 30 * 60.0
 
 
 class CliError(Exception):
@@ -649,11 +652,36 @@ def cmd_setup(url: str) -> int:
     return 0
 
 
-def cmd_sync(client_config: ClientConfig) -> int:
-    index_state = parse_control_state(client_config.fetch_json(API_PATH))
-    if index_state.sync_disabled:
-        raise CliError("Nightly sync already running")
-    client_config.post(SYNC_PATH, {})
+def wait_for_sync(client_config: ClientConfig, started: bool) -> None:
+    timeout = SYNC_FINISH_TIMEOUT if started else SYNC_START_TIMEOUT
+    deadline = time.monotonic() + timeout
+    while True:
+        index_state = parse_control_state(client_config.fetch_json(API_PATH))
+        if index_state.sync_disabled:
+            if not started:
+                started = True
+                deadline = time.monotonic() + SYNC_FINISH_TIMEOUT
+        elif started:
+            return
+        elif time.monotonic() >= deadline:
+            raise CliError("Nightly sync did not start")
+        if time.monotonic() >= deadline:
+            raise CliError("Nightly sync did not finish before timeout")
+        time.sleep(SYNC_POLL_INTERVAL)
+
+
+def cmd_sync(client_config: ClientConfig, wait: bool = False) -> int:
+    try:
+        client_config.post(SYNC_PATH, {})
+    except urllib.error.HTTPError as exc:
+        if exc.code != 409:
+            raise
+        if not wait:
+            raise CliError("Nightly sync already running") from exc
+        wait_for_sync(client_config, started=True)
+    else:
+        if wait:
+            wait_for_sync(client_config, started=False)
     return 0
 
 
@@ -766,7 +794,8 @@ def build_parser() -> argparse.ArgumentParser:
     setup_parser = subparsers.add_parser("setup", help="Save the nightly URL and credentials.")
     setup_parser.add_argument("url", help="Nightly base URL, such as https://nightly.cs.washington.edu/.")
 
-    subparsers.add_parser("sync", help="Start a sync-with-GitHub dry run from the web UI.")
+    sync_parser = subparsers.add_parser("sync", help="Start a sync-with-GitHub dry run from the web UI.")
+    sync_parser.add_argument("--wait", action="store_true", help="Wait until the sync finishes.")
 
     list_parser = subparsers.add_parser("list", help="List runs for a repo.")
     add_run_selector_args(list_parser)
@@ -797,7 +826,7 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_setup(args.url)
         client_config = load_client_config()
         if args.command == "sync":
-            return cmd_sync(client_config)
+            return cmd_sync(client_config, args.wait)
         repo = infer_repo(".")
         if args.command in {"log", "start", "status", "open"} and args.branch is None:
             args.branch = current_branch(".")
