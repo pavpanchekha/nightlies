@@ -548,7 +548,7 @@ class Branch:
         self.slack = repo.slack
 
     def last_run(self) -> float:
-        return float(self.config.get("time", "inf"))
+        return float(self.config.get("time", "-inf"))
 
     @staticmethod
     def parse_filename(filename : str) -> str:
