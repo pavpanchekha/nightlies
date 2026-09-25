@@ -3,6 +3,7 @@ details { margin: 1em 0; }
 summary > h2 { display: inline; }
 form.inline { display: inline; }
 .badge { background: #ddd; padding: 1px .5em; border-radius: .5em; margin-left: .25ch; font-family: monospace; color: #444; }
+.error { color: #900; }
 header { border-bottom: 1px solid #ddd; margin: 0 0 1em; }
 header ul {
     display: flex; flex-direction: row; justify-content: space-between;

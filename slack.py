@@ -161,25 +161,37 @@ def send_api(token: str, channel: str, res: Response) -> None:
 
 class SlackOutput:
     def __init__(self, secrets: Mapping[str, Mapping[str, str]], spec: str, name: str):
-        token, channel = parse_slack_spec(spec, secrets)
-        self.token = token
-        self.channel = channel
+        self.token = ""
+        self.channel = ""
+        self.error: Optional[str] = None
         self.name = name
         self.warnings: Dict[str, str] = {}
+        try:
+            self.token, self.channel = parse_slack_spec(spec, secrets)
+        except SlackError as exc:
+            self.error = str(exc)
 
     def warn(self, key: str, message: str) -> None:
+        if self.error:
+            return
         self.warnings[key] = message
 
     def fatal(self, message: str) -> None:
+        if self.error:
+            return
         data = build_fatal(self.name, message)
         send_api(self.token, self.channel, data)
 
     def post(self, branch: str, info: Dict[str, str]) -> None:
+        if self.error:
+            return
         data = build_runs(self.name, branch, info, self.warnings if self.warnings else None)
         send_api(self.token, self.channel, data)
         self.warnings.clear()
 
     def post_warnings(self) -> None:
+        if self.error:
+            return
         if not self.warnings:
             return
         res = Response(f"Warnings for {self.name}")

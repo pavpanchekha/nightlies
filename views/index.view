@@ -40,7 +40,9 @@
 <details class="repo">
   <summary>
     <h2><kbd class="name">{{repo.name}}</kbd>
-      %if repo.slack and repo.slack.channel:
+      %if repo.slack and repo.slack.error:
+      (<kbd class="error">{{repo.slack.error}}</kbd>)
+      %elif repo.slack and repo.slack.channel:
       (posting to <kbd>#{{repo.slack.channel}}</kbd>)
       %end
     </h2>
