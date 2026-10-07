@@ -1721,6 +1721,190 @@ class TestServerRunNow(unittest.TestCase):
         repo_state.read.assert_called_once_with()
         run_nightlies.assert_not_called()
 
+    def test_rmbranch_rejects_empty_branch_without_deleting_repo(self) -> None:
+        server = self.import_server()
+        repo_dir = Path(tempfile.mkdtemp(prefix="server-repo-"))
+        self.addCleanup(shutil.rmtree, repo_dir)
+        (repo_dir / ".checkout").mkdir()
+        repo_state = SimpleNamespace(
+            name="testrepo",
+            dir=repo_dir,
+            branches={},
+            read=mock.Mock(),
+        )
+        runner = SimpleNamespace(
+            repos=[repo_state],
+            load=mock.Mock(),
+        )
+
+        with (
+            mock.patch.object(server.nightlies, "NightlyRunner", return_value=runner),
+            mock.patch.object(server.bottle, "request", SimpleNamespace(forms={"repo": "testrepo", "branch": ""})),
+            mock.patch.object(server.bottle, "redirect") as redirect,
+        ):
+            with self.assertRaises(server.bottle.HTTPError) as ctx:
+                server.rmbranch()
+
+        self.assertEqual(ctx.exception.status_code, 404)
+        self.assertTrue(repo_dir.exists())
+        repo_state.read.assert_called_once_with()
+        redirect.assert_not_called()
+
+    def test_rmbranch_only_deletes_known_branch_directory(self) -> None:
+        server = self.import_server()
+        repo_dir = Path(tempfile.mkdtemp(prefix="server-repo-"))
+        self.addCleanup(shutil.rmtree, repo_dir)
+        branch_dir = repo_dir / "main"
+        other_dir = repo_dir / "other"
+        branch_dir.mkdir()
+        other_dir.mkdir()
+        repo_state = SimpleNamespace(
+            name="testrepo",
+            dir=repo_dir,
+            checkout=repo_dir / ".checkout",
+            branches={"main": SimpleNamespace(dir=branch_dir)},
+            read=mock.Mock(),
+        )
+        runner = SimpleNamespace(
+            repos=[repo_state],
+            load=mock.Mock(),
+        )
+
+        with (
+            mock.patch.object(server.nightlies, "NightlyRunner", return_value=runner),
+            mock.patch.object(server.bottle, "request", SimpleNamespace(forms={"repo": "testrepo", "branch": "main"})),
+            mock.patch.object(server.subprocess, "run") as run,
+            mock.patch.object(server.bottle, "redirect"),
+        ):
+            server.rmbranch()
+
+        self.assertFalse(branch_dir.exists())
+        self.assertTrue(other_dir.exists())
+        run.assert_called_once_with(
+            ["git", "-C", repo_state.checkout, "worktree", "prune"],
+            check=True,
+        )
+
+    def test_rmbranch_prunes_when_checkout_was_already_removed(self) -> None:
+        server = self.import_server()
+        repo_dir = Path(tempfile.mkdtemp(prefix="server-repo-"))
+        self.addCleanup(shutil.rmtree, repo_dir)
+        repo_state = SimpleNamespace(
+            name="testrepo",
+            dir=repo_dir,
+            checkout=repo_dir / ".checkout",
+            branches={"main": SimpleNamespace(dir=repo_dir / "main")},
+            read=mock.Mock(),
+        )
+        runner = SimpleNamespace(
+            repos=[repo_state],
+            load=mock.Mock(),
+        )
+
+        with (
+            mock.patch.object(server.nightlies, "NightlyRunner", return_value=runner),
+            mock.patch.object(server.bottle, "request", SimpleNamespace(forms={"repo": "testrepo", "branch": "main"})),
+            mock.patch.object(server.shutil, "rmtree", side_effect=FileNotFoundError),
+            mock.patch.object(server.subprocess, "run") as run,
+            mock.patch.object(server.bottle, "redirect"),
+        ):
+            server.rmbranch()
+
+        run.assert_called_once_with(
+            ["git", "-C", repo_state.checkout, "worktree", "prune"],
+            check=True,
+        )
+
+    def test_killbranch_rejects_job_not_reported_as_nightly(self) -> None:
+        server = self.import_server()
+        runner = SimpleNamespace(log_dir=Path("/tmp/logs"), load=mock.Mock())
+
+        with (
+            mock.patch.object(server.nightlies, "NightlyRunner", return_value=runner),
+            mock.patch.object(server.bottle, "request", SimpleNamespace(forms={"job_id": "--user=p92"})),
+            mock.patch.object(server, "get_nightly_jobs", return_value=[]),
+            mock.patch.object(server.subprocess, "run") as run,
+        ):
+            with self.assertRaises(server.bottle.HTTPError) as ctx:
+                server.killbranch()
+
+        self.assertEqual(ctx.exception.status_code, 404)
+        run.assert_not_called()
+
+    def test_killbranch_cancels_only_reported_job(self) -> None:
+        server = self.import_server()
+        runner = SimpleNamespace(log_dir=Path("/tmp/logs"), load=mock.Mock())
+        job = server.NightlyJob("123", "testrepo", "main", "main.log")
+
+        with (
+            mock.patch.object(server.nightlies, "NightlyRunner", return_value=runner),
+            mock.patch.object(server.bottle, "request", SimpleNamespace(forms={"job_id": "123"})),
+            mock.patch.object(server, "get_nightly_jobs", return_value=[job]),
+            mock.patch.object(server.subprocess, "run") as run,
+            mock.patch.object(server.bottle, "redirect"),
+        ):
+            server.killbranch()
+
+        run.assert_called_once_with(["scancel", "--", "123"], check=False)
+
+    def test_fullrun_rejects_when_sync_is_running(self) -> None:
+        server = self.import_server()
+        runner = SimpleNamespace(
+            data={"pid": os.getpid()},
+            load=mock.Mock(),
+            load_pid=mock.Mock(),
+        )
+
+        with (
+            mock.patch.object(server.nightlies, "NightlyRunner", return_value=runner),
+            mock.patch.object(server, "run_nightlies") as run_nightlies,
+        ):
+            with self.assertRaises(server.bottle.HTTPError) as ctx:
+                server.fullrun()
+
+        self.assertEqual(ctx.exception.status_code, 409)
+        run_nightlies.assert_not_called()
+
+    def test_delete_pid_rejects_live_sync(self) -> None:
+        server = self.import_server()
+        pid_file = Path(tempfile.mktemp(prefix="server-pid-"))
+        self.addCleanup(pid_file.unlink, missing_ok=True)
+        pid_file.write_text("lock")
+        runner = SimpleNamespace(
+            data={"pid": os.getpid()},
+            pid_file=pid_file,
+            load=mock.Mock(),
+            load_pid=mock.Mock(),
+        )
+
+        with mock.patch.object(server.nightlies, "NightlyRunner", return_value=runner):
+            with self.assertRaises(server.bottle.HTTPError) as ctx:
+                server.delete_pid()
+
+        self.assertEqual(ctx.exception.status_code, 409)
+        self.assertTrue(pid_file.exists())
+
+    def test_killsync_leaves_lockfile_until_process_exits(self) -> None:
+        server = self.import_server()
+        pid_file = Path(tempfile.mktemp(prefix="server-pid-"))
+        self.addCleanup(pid_file.unlink, missing_ok=True)
+        pid_file.write_text("lock")
+        runner = SimpleNamespace(
+            data={"pid": 1234},
+            pid_file=pid_file,
+            load=mock.Mock(),
+            load_pid=mock.Mock(),
+        )
+
+        with (
+            mock.patch.object(server.nightlies, "NightlyRunner", return_value=runner),
+            mock.patch.object(server.os, "kill"),
+            mock.patch.object(server.bottle, "redirect"),
+        ):
+            server.killsync()
+
+        self.assertTrue(pid_file.exists())
+
     def test_control_state_matches_web_ui_controls(self) -> None:
         server = self.import_server()
         state = {
