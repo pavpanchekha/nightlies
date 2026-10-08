@@ -245,6 +245,9 @@ def dryrun():
     
 @bottle.post("/fullrun")
 def fullrun():
+    runner = nightlies.NightlyRunner(CONF_FILE)
+    runner.load()
+    reject_if_sync_running(runner)
     run_nightlies()
     bottle.redirect("/")
     
@@ -286,12 +289,21 @@ def rmbranch():
     runner = nightlies.NightlyRunner(CONF_FILE)
     runner.load()
     for repo in runner.repos:
-        if repo.name == repo_name:
-            try:
-                shutil.rmtree(nightlies.Branch(repo, branch).dir)
-                subprocess.run(["git", "-C", repo.checkout, "worktree", "prune"], check=True)
-            except FileNotFoundError:
-                pass
+        if repo.name != repo_name:
+            continue
+        repo.read()
+        branch_state = repo.branches.get(branch)
+        if branch_state is None:
+            raise bottle.HTTPError(404, f"Branch {branch} is not available on nightly {repo_name}")
+
+        try:
+            shutil.rmtree(branch_state.dir)
+        except FileNotFoundError:
+            pass
+        subprocess.run(["git", "-C", repo.checkout, "worktree", "prune"], check=True)
+        break
+    else:
+        raise bottle.HTTPError(404, f"Nightly {repo_name} is not configured")
     bottle.redirect("/dryrun")
 
 @bottle.post("/killsync")
@@ -305,23 +317,38 @@ def killsync():
             os.kill(pid, signal.SIGTERM)
         except OSError as e:
             print("/killsync: OSError:", str(e), file=sys.stderr)
-    if runner.pid_file.exists():
-        runner.pid_file.unlink()
+    # Leave the lockfile in place until the process is gone. The user can
+    # remove it with /delete_pid once the sync is no longer running.
     bottle.redirect("/")
 
 @bottle.post("/killbranch")
 def killbranch():
     job_id = bottle.request.forms.get('job_id')
-    if job_id:
-        subprocess.run(["scancel", job_id], check=False)
+    if not job_id:
+        raise bottle.HTTPError(400, "job_id is required")
+
+    runner = nightlies.NightlyRunner(CONF_FILE)
+    runner.load()
+    for job in get_nightly_jobs(runner.log_dir):
+        if job.job_id == job_id:
+            subprocess.run(["scancel", "--", job_id], check=False)
+            break
     else:
-        print("/killbranch: no job_id provided", file=sys.stderr)
+        raise bottle.HTTPError(404, "Nightly job is not running")
     bottle.redirect("/")
     
 @bottle.post("/delete_pid")
 def delete_pid():
     runner = nightlies.NightlyRunner(CONF_FILE)
     runner.load()
+    runner.load_pid()
+    if runner.data and "pid" in runner.data:
+        try:
+            os.kill(runner.data["pid"], 0)
+        except OSError:
+            pass
+        else:
+            raise bottle.HTTPError(409, "Nightly sync still running")
     if runner.pid_file.exists():
         runner.pid_file.unlink()
     bottle.redirect("/")
