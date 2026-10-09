@@ -33,6 +33,8 @@ REPO_BADGES = [
     "never", # Never run this branch
 ]
 
+PR_BRANCH_PREFIX = "pr/"
+
 
 class NightlyRunner:
     def __init__(self, config_file : str) -> None:
@@ -366,7 +368,10 @@ class Repository:
         out : Dict[str, int] = {}
         for pr in pr_data:
             if pr["head"]["repo"]["full_name"] == self.gh_name:
-                out[pr["head"]["ref"]] = pr["number"]
+                branch_name = pr["head"]["ref"]
+            else:
+                branch_name = f"{PR_BRANCH_PREFIX}{pr['number']}"
+            out[branch_name] = pr["number"]
         return out
 
     def get_pr_link(self, pr : int) -> str:
@@ -404,13 +409,28 @@ class Repository:
             self.runner.exec(2, ["git", "clone", "--recursive", self.url, self.checkout])
             self.runner.exec(2, ["git", "-C", self.checkout, "checkout", "--detach"])
 
+        pr_map = self.list_pr_branches()
         self.runner.log(1, "Updating branches for " + self.name)
-        self.runner.exec(2, ["git", "-C", self.checkout, "fetch", "origin", "--prune", "--no-tags", "--recurse-submodules=on-demand"])
+        fetch: List[Union[str, Path]] = [
+            "git", "-C", self.checkout, "fetch", "origin", "--prune", "--no-tags",
+            "--recurse-submodules=on-demand",
+        ]
+        fetch.extend(
+            f"+refs/pull/{pr}/head:refs/remotes/origin/{branch}"
+            for branch, pr in pr_map.items()
+            if branch.startswith(PR_BRANCH_PREFIX)
+        )
+        self.runner.exec(2, fetch)
 
         if "branches" in self.config:
             all_branches = self.config["branches"].split()
         else:
-            all_branches = self.list_branches()
+            # Pull refs fetched for previous runs are not branches in the
+            # repository and should disappear when their PRs close.
+            all_branches = [
+                branch for branch in self.list_branches()
+                if not branch.startswith(PR_BRANCH_PREFIX) or branch in pr_map
+            ]
         self.branches = { branch: Branch(self, branch) for branch in all_branches }
 
         if self.config.getboolean("clean", fallback=True):
@@ -421,7 +441,6 @@ class Repository:
                 branch.create()
             branch.read_metadata()
 
-        pr_map = self.list_pr_branches()
         for name, branch in self.branches.items():
             if name in pr_map:
                 branch.config["pr"] = pr_map[name]
