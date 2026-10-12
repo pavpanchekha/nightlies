@@ -826,22 +826,6 @@ class TestCli(unittest.TestCase):
             ],
         )
 
-    def test_cmd_sync_refuses_when_ui_disables_sync(self) -> None:
-        state = cli.IndexState(True, [])
-
-        with (
-            mock.patch.object(cli, "load_client_config", return_value=self.client_config()),
-            mock.patch.object(cli.ClientConfig, "fetch_json", return_value={
-                "sync_disabled": True,
-                "start_targets": [],
-            }),
-            mock.patch("sys.stderr", new_callable=io.StringIO) as stderr,
-        ):
-            rc = cli.main(["sync"])
-
-        self.assertEqual(rc, 1)
-        self.assertEqual(stderr.getvalue(), "error: Nightly sync already running\n")
-
     def test_cmd_sync_posts_to_dryrun_endpoint(self) -> None:
         requests: list[urllib.request.Request] = []
 
@@ -851,13 +835,7 @@ class TestCli(unittest.TestCase):
                 requests.append(cast(urllib.request.Request, request))
                 return FakeResponse(b"ok")
 
-        with (
-            self.client_open_patch(CapturingOpener()),
-            mock.patch.object(cli.ClientConfig, "fetch_json", return_value={
-                "sync_disabled": False,
-                "start_targets": [],
-            }),
-        ):
+        with self.client_open_patch(CapturingOpener()):
             rc = cli.cmd_sync(self.client_config())
 
         self.assertEqual(rc, 0)
@@ -866,6 +844,103 @@ class TestCli(unittest.TestCase):
         self.assertEqual(request.full_url, urllib.parse.urljoin(self.client_config().index_url, cli.SYNC_PATH))
         self.assertEqual(request.get_method(), "POST")
         self.assertEqual(request.data, b"")
+
+    def test_cmd_sync_waits_for_started_sync_to_finish(self) -> None:
+        states = iter([False, True, True, False])
+
+        with (
+            mock.patch.object(cli.ClientConfig, "post") as post,
+            mock.patch.object(
+                cli.ClientConfig,
+                "fetch_json",
+                side_effect=lambda *_args: {"sync_disabled": next(states), "start_targets": []},
+            ),
+            mock.patch.object(cli.time, "sleep") as sleep,
+        ):
+            rc = cli.cmd_sync(self.client_config(), wait=True)
+
+        self.assertEqual(rc, 0)
+        post.assert_called_once_with(cli.SYNC_PATH, {})
+        self.assertEqual(sleep.call_count, 3)
+
+    def test_cmd_sync_wait_rejects_running_sync(self) -> None:
+        conflict = urllib.error.HTTPError(
+            cli.SYNC_PATH,
+            409,
+            "Conflict",
+            hdrs=None,
+            fp=io.BytesIO(b"Nightly sync already running"),
+        )
+
+        with (
+            mock.patch.object(cli.ClientConfig, "post", side_effect=conflict) as post,
+            mock.patch.object(cli.ClientConfig, "fetch_json") as fetch_json,
+            mock.patch.object(cli.time, "sleep") as sleep,
+        ):
+            with self.assertRaisesRegex(
+                cli.CliError,
+                r"^Nightly sync already running\. It should finish within a minute or two\.$",
+            ):
+                cli.cmd_sync(self.client_config(), wait=True)
+
+        post.assert_called_once_with(cli.SYNC_PATH, {})
+        fetch_json.assert_not_called()
+        sleep.assert_not_called()
+
+    def test_cmd_sync_reports_post_race_as_sync_running(self) -> None:
+        conflict = urllib.error.HTTPError(
+            cli.SYNC_PATH,
+            409,
+            "Conflict",
+            hdrs=None,
+            fp=io.BytesIO(b"Nightly sync already running"),
+        )
+
+        with mock.patch.object(cli.ClientConfig, "post", side_effect=conflict):
+            with self.assertRaisesRegex(
+                cli.CliError,
+                r"^Nightly sync already running\. It should finish within a minute or two\.$",
+            ):
+                cli.cmd_sync(self.client_config())
+
+    def test_wait_for_sync_waits_past_start_timeout(self) -> None:
+        with (
+            mock.patch.object(
+                cli.ClientConfig,
+                "fetch_json",
+                side_effect=[
+                    {"sync_disabled": False, "start_targets": []},
+                    {"sync_disabled": False, "start_targets": []},
+                    {"sync_disabled": True, "start_targets": []},
+                    {"sync_disabled": False, "start_targets": []},
+                ],
+            ) as fetch_json,
+            mock.patch.object(cli.time, "monotonic", side_effect=[0, 11]),
+            mock.patch.object(cli.time, "sleep") as sleep,
+        ):
+            cli.wait_for_sync(self.client_config(), started=False)
+
+        self.assertEqual(fetch_json.call_count, 4)
+        self.assertEqual(sleep.call_count, 3)
+
+    def test_wait_for_sync_waits_past_finish_timeout(self) -> None:
+        with (
+            mock.patch.object(
+                cli.ClientConfig,
+                "fetch_json",
+                side_effect=[
+                    {"sync_disabled": True, "start_targets": []},
+                    {"sync_disabled": True, "start_targets": []},
+                    {"sync_disabled": False, "start_targets": []},
+                ],
+            ) as fetch_json,
+            mock.patch.object(cli.time, "monotonic", side_effect=[0, 30 * 60 + 1]),
+            mock.patch.object(cli.time, "sleep") as sleep,
+        ):
+            cli.wait_for_sync(self.client_config(), started=True)
+
+        self.assertEqual(fetch_json.call_count, 3)
+        self.assertEqual(sleep.call_count, 2)
 
     def test_cmd_start_posts_server_repo_token(self) -> None:
         requests: list[urllib.request.Request] = []
@@ -893,6 +968,19 @@ class TestCli(unittest.TestCase):
         self.assertEqual(request.full_url, urllib.parse.urljoin(self.client_config().index_url, cli.START_PATH))
         self.assertEqual(request.get_method(), "POST")
         self.assertEqual(request.data, b"repo=herbie&branch=feature%2Ftest")
+
+    def test_cmd_start_explains_when_sync_is_already_running(self) -> None:
+        with (
+            mock.patch.object(cli.ClientConfig, "fetch_json", return_value={
+                "sync_disabled": True,
+                "start_targets": [{"repo": "herbie", "branch": "main", "disabled": False}],
+            }),
+        ):
+            with self.assertRaisesRegex(
+                cli.CliError,
+                r"^Nightly sync already running\. It should finish within a minute or two\.$",
+            ):
+                cli.cmd_start(self.client_config(), "herbie", "main")
 
     def test_cmd_start_refuses_queued_branch(self) -> None:
         state = cli.IndexState(False, [cli.StartTarget("herbie", "feature/test", True)])
