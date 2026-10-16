@@ -876,10 +876,11 @@ class TestCli(unittest.TestCase):
                 requests.append(cast(urllib.request.Request, request))
                 return FakeResponse(b"ok")
 
-        state = cli.IndexState(False, [cli.StartTarget("herbie", "feature/test", False)])
+        state = cli.IndexState(False, [cli.StartTarget("herbie", "feature/test", False, 3661.6, "main")])
 
         with (
             self.client_open_patch(CapturingOpener()),
+            mock.patch("sys.stdout", new_callable=io.StringIO) as stdout,
             mock.patch.object(cli.ClientConfig, "fetch_json", return_value={
                 "sync_disabled": False,
                 "start_targets": [target.__dict__ for target in state.start_targets],
@@ -893,6 +894,7 @@ class TestCli(unittest.TestCase):
         self.assertEqual(request.full_url, urllib.parse.urljoin(self.client_config().index_url, cli.START_PATH))
         self.assertEqual(request.get_method(), "POST")
         self.assertEqual(request.data, b"repo=herbie&branch=feature%2Ftest")
+        self.assertEqual(stdout.getvalue(), "Nightly started; last run on main took 61.0m.\n")
 
     def test_cmd_start_refuses_queued_branch(self) -> None:
         state = cli.IndexState(False, [cli.StartTarget("herbie", "feature/test", True)])
@@ -948,6 +950,7 @@ class TestCli(unittest.TestCase):
 
         with (
             self.client_open_patch(CapturingOpener()),
+            mock.patch("sys.stdout", new_callable=io.StringIO),
             mock.patch.object(cli, "load_client_config", return_value=self.client_config()),
             mock.patch.object(cli, "infer_repo", return_value="herbie"),
             mock.patch.object(cli, "current_branch", return_value="feature/test"),
@@ -1339,11 +1342,12 @@ class TestNightlyRunnerHarness(unittest.TestCase):
         contents = metadata.read_text()
         self.assertIn('"commit"', contents)
         self.assertIn('"time"', contents)
+        self.assertGreater(json.loads(contents)["duration_seconds"], 0)
         report_dir = self.published_report(result)
         self.assertFalse((report_dir / "nightly_info.json").exists())
 
     def test_runner_writes_metadata_for_successful_run(self) -> None:
-        self.makefile("add simple nightly target", ["echo ok"])
+        self.makefile("add simple nightly target", ["sleep 0.2", "echo ok"])
         self.git(["push", "origin", "main"], repo=self.work_dir)
 
         self.nightly(repo_updates={"branches": "main"}, complete=True)
@@ -1353,6 +1357,7 @@ class TestNightlyRunnerHarness(unittest.TestCase):
         contents = metadata.read_text()
         self.assertIn('"commit"', contents)
         self.assertIn('"time"', contents)
+        self.assertGreaterEqual(json.loads(contents)["duration_seconds"], 0.15)
 
     def test_northflank_runner_clones_and_runs_requested_commit(self) -> None:
         self.makefile(
@@ -1910,9 +1915,10 @@ class TestServerRunNow(unittest.TestCase):
         state = {
             "runner": SimpleNamespace(repos=[SimpleNamespace(
                 name="testrepo",
+                config={},
                 branches={
-                    "main": SimpleNamespace(name="main", badges=[]),
-                    "feature": SimpleNamespace(name="feature", badges=["queued"]),
+                    "main": SimpleNamespace(name="main", badges=[], config={}),
+                    "feature": SimpleNamespace(name="feature", badges=["queued"], config={}),
                 },
             )]),
             "current": None,
@@ -1921,10 +1927,64 @@ class TestServerRunNow(unittest.TestCase):
         self.assertEqual(server.control_state(state), {
             "sync_disabled": False,
             "start_targets": [
-                {"repo": "testrepo", "branch": "main", "disabled": False},
-                {"repo": "testrepo", "branch": "feature", "disabled": True},
+                {
+                    "repo": "testrepo",
+                    "branch": "main",
+                    "disabled": False,
+                    "estimate_seconds": None,
+                    "estimate_branch": None,
+                },
+                {
+                    "repo": "testrepo",
+                    "branch": "feature",
+                    "disabled": True,
+                    "estimate_seconds": None,
+                    "estimate_branch": None,
+                },
             ],
         })
+
+    def test_control_state_uses_recent_branch_metadata_and_main_fallback(self) -> None:
+        server = self.import_server()
+        now = 1_800_000_000
+
+        def branch(name: str, badges: list[str], metadata: dict[str, Any]) -> Any:
+            return SimpleNamespace(name=name, badges=badges, config=metadata)
+
+        repo = SimpleNamespace(
+            name="testrepo",
+            config={"main": "trunk"},
+            branches={
+                "trunk": branch("trunk", [], {"time": now - 100, "duration_seconds": 90}),
+                "recent": branch("recent", [], {"time": now - 10, "duration_seconds": 123}),
+                "old": branch("old", [], {
+                    "time": now - server.RUNTIME_MAX_AGE - 1,
+                    "duration_seconds": 900,
+                }),
+                "boundary": branch("boundary", [], {
+                    "time": now - server.RUNTIME_MAX_AGE,
+                    "duration_seconds": 25,
+                }),
+            },
+        )
+        no_history_repo = SimpleNamespace(
+            name="newrepo",
+            config={},
+            branches={"new": branch("new", [], {})},
+        )
+
+        with mock.patch.object(server.time, "time", return_value=now):
+            state = server.control_state({
+                "runner": SimpleNamespace(repos=[repo, no_history_repo]),
+                "current": None,
+            })
+
+        targets = {target["branch"]: target for target in state["start_targets"]}
+        self.assertEqual((targets["recent"]["estimate_seconds"], targets["recent"]["estimate_branch"]), (123.0, "recent"))
+        self.assertEqual((targets["old"]["estimate_seconds"], targets["old"]["estimate_branch"]), (90.0, "trunk"))
+        self.assertEqual((targets["boundary"]["estimate_seconds"], targets["boundary"]["estimate_branch"]), (25.0, "boundary"))
+        self.assertIsNone(targets["new"]["estimate_seconds"])
+        self.assertIsNone(targets["new"]["estimate_branch"])
 
     def test_log_entries_lists_newest_logs_with_escaped_urls(self) -> None:
         server = self.import_server()

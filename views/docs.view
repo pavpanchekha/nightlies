@@ -182,72 +182,23 @@ it will be killed. By default, there is no memory limit.</dd>
 
 </dl>
 
+<h2>Command-line interface</h2>
+
+<p>Run the complete Nightlies command-line interface from a repository
+checkout. Authenticate with this server once:</p>
+
+<pre><code>uvx nightlies setup {{baseurl}}</code></pre>
+
+<p>The setup command prompts for your username and password. To see
+available commands and usage, run:</p>
+
+<pre><code>uvx nightlies --help</code></pre>
+
 <h2>nightly_info.json</h2>
 
-<p>Published reports include a runner-generated
-<code>nightly_info.json</code> file with basic metadata about the run,
-such as branch, commit, status, timing, and report/log URLs.</p>
-
-<p>The <code>nightly_info.json</code> file is written by the runner at
-the top level of the report directory, but only when the nightly run
-itself succeeds and the report is published. It contains a single JSON
-object with these keys:</p>
-
-<dl>
-<dt><code>repo</code></dt>
-<dd>The short repository name used in report paths.</dd>
-
-<dt><code>branch</code></dt>
-<dd>The branch name that was run, like <code>main</code> or
-<code>feature/test</code>.</dd>
-
-<dt><code>branch_filename</code></dt>
-<dd>The escaped branch name used on disk and in report directory
-names.</dd>
-
-<dt><code>commit</code></dt>
-<dd>The full git commit SHA that the runner checked out and ran.</dd>
-
-<dt><code>commit_short</code></dt>
-<dd>The first 8 characters of <code>commit</code>.</dd>
-
-<dt><code>status</code></dt>
-<dd>The final run result: <code>success</code>,
-<code>failure</code>, <code>timeout</code>, or
-<code>killed</code>.</dd>
-
-<dt><code>started_at</code></dt>
-<dd>The run start time in UTC ISO 8601 format.</dd>
-
-<dt><code>finished_at</code></dt>
-<dd>The run finish time in UTC ISO 8601 format.</dd>
-
-<dt><code>duration_seconds</code></dt>
-<dd>The wall-clock runtime as a number of seconds.</dd>
-
-<dt><code>duration_human</code></dt>
-<dd>The runtime formatted for people, like <code>42.0s</code> or
-<code>3.5m</code>.</dd>
-
-<dt><code>log</code></dt>
-<dd>The log file name for the run.</dd>
-
-<dt><code>log_url</code></dt>
-<dd>The absolute URL to the log file for the run.</dd>
-
-<dt><code>report_url</code></dt>
-<dd>The absolute URL to the published report directory.</dd>
-
-<dt><code>image_url</code></dt>
-<dd>The absolute URL to the configured report image when one exists,
-otherwise <code>null</code>.</dd>
-
-<dt><code>files</code></dt>
-<dd>A list of file records describing the published report contents.
-Each record contains <code>path</code>, the path actually stored
-under the report directory, and <code>gzip</code>, which is
-<code>true</code> when the runner created that stored file by gzipping a
-report artifact before upload. Downloaders can fetch
-<code>path</code> directly and, when <code>gzip</code> is true,
-ungzip it after download.</dd>
-</dl>
+<p>Successful published reports include a runner-generated
+<code>nightly_info.json</code> machine-readable manifest. The CLI
+provides the normal status and download workflow; the manifest also
+retains details the CLI does not display directly, including the full
+commit SHA, escaped branch filename, and per-file stored paths and
+compression flags.</p>
