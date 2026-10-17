@@ -423,6 +423,25 @@ class TestCli(unittest.TestCase):
             "2026-04-20 09:08:32 taylor-order0\n",
         )
 
+    def test_cmd_list_decodes_escaped_branch_names_for_filtering_and_display(self) -> None:
+        entry = log_name(
+            name="2026-04-20-090832-1-herbie-feature_2ftest_25branch.log",
+            url="/logs/feature-test.log",
+        )
+
+        with (
+            mock.patch.object(cli, "iter_entries", return_value=iter([entry])),
+            mock.patch("sys.stdout", new_callable=io.StringIO) as stdout,
+        ):
+            rc = cli.cmd_list(
+                self.client_config(),
+                "herbie",
+                cli.RunSelector("feature/test%branch", None, None),
+            )
+
+        self.assertEqual(rc, 0)
+        self.assertEqual(stdout.getvalue(), "2026-04-20 09:08:32 feature/test%branch\n")
+
     def test_main_log_without_branch_defaults_to_current_branch(self) -> None:
         entries = [
             log_name(
@@ -1682,6 +1701,21 @@ class TestServerRunNow(unittest.TestCase):
         )
         runner.config["testrepo"] = {}
         return runner, repo_state
+
+    def test_get_nightly_jobs_decodes_escaped_branch_names(self) -> None:
+        server = self.import_server()
+        result = subprocess.CompletedProcess(
+            ["squeue"],
+            0,
+            stdout="nightly:testrepo:feature_2ftest_25branch 123 run.log 00:03:04 RUNNING\n",
+            stderr="",
+        )
+
+        with mock.patch.object(server.subprocess, "run", return_value=result):
+            jobs = server.get_nightly_jobs(Path("/missing/logs"))
+
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual(jobs[0].branch, "feature/test%branch")
 
     def test_runnow_rejects_branch_not_available_on_nightly(self) -> None:
         server = self.import_server()

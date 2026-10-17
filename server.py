@@ -53,6 +53,7 @@ def get_nightly_jobs(log_dir: Path) -> list[NightlyJob]:
         if state != "RUNNING":
             continue
         repo, branch = job_name.removeprefix("nightly:").split(":", 1)
+        branch = nightlies.Branch.parse_filename(branch)
         last_print = None
         try:
             last_print = time.time() - os.path.getmtime(log_dir / log)
