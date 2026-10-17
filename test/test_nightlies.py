@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib
 from pathlib import Path
 import configparser
+import datetime
 import gzip
 import io
 import json
@@ -450,7 +451,7 @@ class TestCli(unittest.TestCase):
         self.assertEqual(stdout.getvalue(), "main log\n")
 
     def test_cmd_status_prints_manifest_metadata(self) -> None:
-        report_name = "1713570000:taylor-order0:deadbeef"
+        report_name = "1776697200:taylor-order0:deadbeef"
         client_config = self.client_config()
         report_url = self.report_url(client_config, "herbie/" + report_name)
         manifest = {
@@ -1138,6 +1139,8 @@ class TestNightlyRunnerHarness(unittest.TestCase):
         self.assertRegex(info["commit"], r"^[0-9a-f]{40}$")
         self.assertEqual(info["commit_short"], info["commit"][:8])
         self.assertEqual(info["log"], "publish-report.log")
+        started_at = datetime.datetime.fromisoformat(info["started_at"].replace("Z", "+00:00"))
+        self.assertEqual(report_dir.name.split(":", maxsplit=1)[0], str(int(started_at.timestamp())))
         self.assertEqual(
             info["report_url"],
             "https://nightlies.example/reports/testrepo/" + report_dir.name,
