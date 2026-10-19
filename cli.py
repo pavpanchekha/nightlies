@@ -350,11 +350,12 @@ def parse_run_log(repo: str, name: str) -> RunLog | None:
     branch_parts = rest[len(repo_parts) :]
     if not branch_parts:
         return None
+    branch = "-".join(branch_parts).replace("_2f", "/").replace("_25", "%")
     return RunLog(
         name=name,
         date="-".join(parts[:3]),
         time=":".join([raw_time[:2], raw_time[2:4], raw_time[4:6]]),
-        branch="-".join(branch_parts),
+        branch=branch,
     )
 
 
