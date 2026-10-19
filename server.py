@@ -141,20 +141,44 @@ def load():
     }
 
 
+RUNTIME_MAX_AGE = 30 * 24 * 60 * 60  # Only use runs from the last 30 days.
+
+
+def branch_runtime_estimate(
+    repo: nightlies.Repository,
+    branch: nightlies.Branch,
+    now: float,
+) -> tuple[float | None, str | None]:
+    main_name = repo.config.get("main", "main")
+    fallback = repo.branches.get(main_name) if branch.name != main_name else None
+    for candidate in (branch, fallback):
+        if candidate is None:
+            continue
+        last_run = candidate.config.get("time")
+        duration = candidate.config.get("duration_seconds")
+        if last_run is not None and duration is not None and now - last_run <= RUNTIME_MAX_AGE:
+            return float(duration), candidate.name
+    return None, None
+
+
 def control_state(state: dict[str, object]) -> dict[str, object]:
     runner = cast(nightlies.NightlyRunner, state["runner"])
     current = state["current"]
-    return {
-        "sync_disabled": current is not None,
-        "start_targets": [
-            {
+    now = time.time()
+    start_targets = []
+    for repo in runner.repos:
+        for branch in repo.branches.values():
+            estimate_seconds, estimate_branch = branch_runtime_estimate(repo, branch, now)
+            start_targets.append({
                 "repo": repo.name,
                 "branch": branch.name,
                 "disabled": current is not None or "queued" in branch.badges,
-            }
-            for repo in runner.repos
-            for branch in repo.branches.values()
-        ],
+                "estimate_seconds": estimate_seconds,
+                "estimate_branch": estimate_branch,
+            })
+    return {
+        "sync_disabled": current is not None,
+        "start_targets": start_targets,
     }
 
 

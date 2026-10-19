@@ -1,6 +1,6 @@
 % from datetime import datetime
 % from pathlib import Path
-% from runner import format_time
+% from common import format_time
 % from urllib.parse import quote
 
 <header>

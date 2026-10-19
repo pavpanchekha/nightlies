@@ -21,6 +21,8 @@ import urllib.parse
 import urllib.request
 import webbrowser
 
+from common import format_time
+
 
 ## Setup & config file
 
@@ -156,6 +158,8 @@ class StartTarget:
     repo: str
     branch: str
     disabled: bool
+    estimate_seconds: float | None = None
+    estimate_branch: str | None = None
 
 
 @dataclass(frozen=True)
@@ -178,7 +182,17 @@ def parse_control_state(payload: dict[str, object]) -> IndexState:
         disabled = target.get("disabled")
         if not isinstance(repo, str) or not isinstance(branch, str) or not isinstance(disabled, bool):
             raise CliError("invalid control response")
-        start_targets.append(StartTarget(repo, branch, disabled))
+        estimate_seconds = target.get("estimate_seconds")
+        estimate_branch = target.get("estimate_branch")
+        if (
+            not isinstance(estimate_seconds, int | float | None)
+            or isinstance(estimate_seconds, bool)
+            or (estimate_seconds is not None and estimate_seconds < 0)
+            or not isinstance(estimate_branch, str | None)
+            or (estimate_seconds is None) != (estimate_branch is None)
+        ):
+            raise CliError("invalid control response")
+        start_targets.append(StartTarget(repo, branch, disabled, estimate_seconds, estimate_branch))
     return IndexState(sync_disabled, start_targets)
 
 
@@ -666,6 +680,13 @@ def cmd_start(client_config: ClientConfig, repo: str, branch: str) -> int:
     if target.disabled:
         raise CliError(f"Branch {target.branch} on {target.repo} already queued")
     client_config.post(START_PATH, {"repo": target.repo, "branch": target.branch})
+    if target.estimate_seconds is None or target.estimate_branch is None:
+        print("Nightly started; no runtime estimate available.")
+    else:
+        print(
+            f"Nightly started; last run on {target.estimate_branch} took "
+            f"{format_time(target.estimate_seconds)}."
+        )
     return 0
 
 

@@ -7,18 +7,10 @@ import argparse, gzip, json, shlex, shutil, subprocess, sys, tempfile, time
 import signal
 import os
 import apt, config, slack
+from common import format_time
 
 def log(msg: str) -> None:
     print(msg, flush=True)
-
-def format_time(ts: float) -> str:
-    t = float(ts)
-    if t < 120:
-        return f"{t:.1f}s"
-    elif t < 120*60:
-        return f"{t/60:.1f}m"
-    else:
-        return f"{t/60/60:.1f}h"
 
 def format_cmd(s: Sequence[str | Path]) -> str:
     return shlex.join([str(part) for part in s])
@@ -238,9 +230,11 @@ def run_branch(bc: config.BranchConfig, log_name: str | None) -> int:
 
     if start is not None:
         assert out is not None
+        finished_at = datetime.now(timezone.utc)
         metadata = read_metadata(bc.metadata_file)
         metadata["commit"] = out
-        metadata["time"] = time.time()
+        metadata["time"] = finished_at.timestamp()
+        metadata["duration_seconds"] = (finished_at - start).total_seconds()
         save_metadata(bc.metadata_file, metadata)
 
         if bc.report_dir and bc.report_dir.exists():
