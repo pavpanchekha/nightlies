@@ -256,7 +256,7 @@ def run_branch(bc: config.BranchConfig, log_name: str | None) -> int:
 
                 if "url" not in info and bc.base_url:
                     assert log_name is not None
-                    name = f"{int(time.time())}:{bc.branch_filename}:{out[:8]}"
+                    name = f"{int(start.timestamp())}:{bc.branch_filename}:{out[:8]}"
                     dest_dir = bc.reports_dir / bc.repo_name / name
                     report_url = bc.base_url + "reports/" + bc.repo_name + "/" + name
 
