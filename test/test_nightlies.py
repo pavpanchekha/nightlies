@@ -1094,14 +1094,67 @@ class TestNightlyRunnerHarness(unittest.TestCase):
         self.assertTrue((repo_dir / "main").is_dir())
         self.assertFalse((repo_dir / "feature_2ftest").exists())
 
-    def test_adding_new_branch_gets_scheduled(self) -> None:
-        first = self.nightly(repo_updates={}, complete=True)
-        self.assertEqual(first, ["main"])
+    def test_new_slash_branch_works_with_stale_prefix_branch(self) -> None:
+        self.create_branch("foo", "foo.txt", "foo\n", "add foo branch")
+        first = self.nightly(repo_updates={"branches": "foo"}, complete=True)
+        self.assertEqual(first, ["foo"])
 
-        self.create_branch("hotfix/new", "hotfix.txt", "v1\n", "add hotfix branch")
+        repo_dir = self.repos_dir / "testrepo"
+        checkout = repo_dir / ".checkout"
+        self.git(["branch", "foo", "origin/foo"], repo=checkout)
 
-        ran = self.nightly()
-        self.assertEqual(ran, ["hotfix/new"])
+        # Simulate the upstream replacing foo with foo/bar, while the local
+        # branch foo left by an older nightly version remains in .checkout.
+        self.git(["push", "origin", "--delete", "foo"], repo=self.work_dir)
+        self.git(["branch", "-D", "foo"], repo=self.work_dir)
+        self.git(["checkout", "-b", "foo/bar"], repo=self.work_dir)
+        self.commit(self.work_dir, "foo-bar.txt", "foo/bar\n", "add foo/bar branch")
+        self.git(["push", "origin", "foo/bar"], repo=self.work_dir)
+        self.git(["checkout", "main"], repo=self.work_dir)
+
+        ran = self.nightly(repo_updates={"branches": "foo/bar"})
+        self.assertEqual(ran, ["foo/bar"])
+
+        worktree = repo_dir / "foo_2fbar"
+        self.assertFalse((repo_dir / "foo").exists())
+        self.assertEqual(
+            subprocess.run(
+                ["git", "-C", str(checkout), "branch", "--list", "foo"],
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.strip(),
+            "foo",
+        )
+        symbolic_head = subprocess.run(
+            ["git", "-C", str(worktree), "symbolic-ref", "--quiet", "HEAD"],
+            capture_output=True,
+            text=True,
+        )
+        self.assertNotEqual(symbolic_head.returncode, 0)
+        self.assertEqual(
+            subprocess.run(
+                ["git", "-C", str(worktree), "rev-parse", "HEAD"],
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.strip(),
+            subprocess.run(
+                ["git", "-C", str(checkout), "rev-parse", "origin/foo/bar"],
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.strip(),
+        )
+        self.assertEqual(
+            subprocess.run(
+                ["git", "-C", str(checkout), "branch", "--list", "foo/bar"],
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.strip(),
+            "",
+        )
 
     def test_deleting_branch_removes_worktree_directory(self) -> None:
         self.create_branch("feature/test", "feature.txt", "v1\n", "initial feature commit")
