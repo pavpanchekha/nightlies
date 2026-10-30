@@ -560,7 +560,10 @@ class Branch:
 
     def create(self) -> None:
         relpath = self.dir.relative_to(self.repo.dir)
-        self.repo.runner.exec(2, ["git", "-C", self.repo.checkout, "worktree", "add", ".." / relpath, self.name])
+        self.repo.runner.exec(2, [
+            "git", "-C", self.repo.checkout, "worktree", "add", "--detach",
+            ".." / relpath, "origin/" + self.name,
+        ])
 
     def read_metadata(self) -> None:
         self.config = {}
