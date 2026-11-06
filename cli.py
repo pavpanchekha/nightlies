@@ -29,10 +29,12 @@ from common import format_time
 STATE_FILENAME = "state.json"
 API_PATH = "/api"
 API_LOGS_PATH = "/api/logs"
+API_JOBS_PATH = "/api/jobs"
 LOG_PAGE_SIZE = 10
 REPORTS_PATH = "/reports/"
 SYNC_PATH = "/dryrun"
 START_PATH = "/runnow"
+STOP_PATH = "/killbranch"
 
 
 class CliError(Exception):
@@ -163,6 +165,13 @@ class StartTarget:
 
 
 @dataclass(frozen=True)
+class RunningJob:
+    repo: str
+    branch: str
+    job_id: str
+
+
+@dataclass(frozen=True)
 class IndexState:
     sync_disabled: bool
     start_targets: list[StartTarget]
@@ -194,6 +203,23 @@ def parse_control_state(payload: dict[str, object]) -> IndexState:
             raise CliError("invalid control response")
         start_targets.append(StartTarget(repo, branch, disabled, estimate_seconds, estimate_branch))
     return IndexState(sync_disabled, start_targets)
+
+
+def parse_running_jobs(payload: dict[str, object]) -> list[RunningJob]:
+    jobs = payload.get("jobs")
+    if not isinstance(jobs, list):
+        raise CliError("invalid job response")
+    running_jobs: list[RunningJob] = []
+    for job in jobs:
+        if not isinstance(job, dict):
+            raise CliError("invalid job response")
+        repo = job.get("repo")
+        branch = job.get("branch")
+        job_id = job.get("job_id")
+        if not isinstance(repo, str) or not isinstance(branch, str) or not isinstance(job_id, str):
+            raise CliError("invalid job response")
+        running_jobs.append(RunningJob(repo, branch, job_id))
+    return running_jobs
 
 
 def parse_log_entries(payload: dict[str, object]) -> list[str]:
@@ -690,6 +716,18 @@ def cmd_start(client_config: ClientConfig, repo: str, branch: str) -> int:
     return 0
 
 
+def cmd_stop(client_config: ClientConfig, repo: str, branch: str) -> int:
+    jobs = parse_running_jobs(client_config.fetch_json(API_JOBS_PATH))
+    matches = [job for job in jobs if job.repo == repo and job.branch == branch]
+    if not matches:
+        raise CliError(f"No running nightly for branch {branch} on {repo}.")
+    if len(matches) > 1:
+        raise CliError(f"Multiple running nightlies for branch {branch} on {repo}; stop one from the website.")
+    client_config.post(STOP_PATH, {"job_id": matches[0].job_id})
+    print(f"Stopped nightly for branch {branch} on {repo}.")
+    return 0
+
+
 def cmd_download(client_config: ClientConfig, repo: str, selector: RunSelector) -> int:
     run_log = next(matching_run_logs(iter_entries(client_config, repo, selector), repo, selector), None)
     if run_log is None:
@@ -796,6 +834,9 @@ def build_parser() -> argparse.ArgumentParser:
     start_parser = subparsers.add_parser("start", help="Start a single repo branch run from the web UI.")
     start_parser.add_argument("branch", nargs="?", default=None, help="Branch name.")
 
+    stop_parser = subparsers.add_parser("stop", help="Stop a running nightly for a repo branch.")
+    stop_parser.add_argument("branch", help="Branch name.")
+
     log_parser = subparsers.add_parser("log", help="Print a log for a repo branch.")
     log_parser.add_argument("-f", action="store_true", dest="follow", help="Follow the log until it completes.")
     add_run_selector_args(log_parser)
@@ -825,6 +866,8 @@ def main(argv: list[str] | None = None) -> int:
             args.branch = current_branch(".")
         if args.command == "start":
             return cmd_start(client_config, repo, args.branch)
+        if args.command == "stop":
+            return cmd_stop(client_config, repo, args.branch)
         selector = RunSelector(args.branch, args.date, args.time)
         if args.command == "list":
             return cmd_list(client_config, repo, selector)

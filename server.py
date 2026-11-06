@@ -214,6 +214,16 @@ def api():
     return control_state(load())
 
 
+@bottle.route("/api/jobs")
+def api_jobs():
+    runner = nightlies.NightlyRunner(CONF_FILE)
+    runner.load()
+    return {"jobs": [
+        {"repo": job.repo, "branch": job.branch, "job_id": job.job_id}
+        for job in get_nightly_jobs(runner.log_dir)
+    ]}
+
+
 @bottle.route("/api/logs")
 def api_logs():
     runner = nightlies.NightlyRunner(CONF_FILE)
