@@ -846,6 +846,101 @@ class TestCli(unittest.TestCase):
             ],
         )
 
+    def test_parse_running_jobs_reads_api_response(self) -> None:
+        jobs = cli.parse_running_jobs({
+            "jobs": [{"repo": "herbie", "branch": "feature/test", "job_id": "123"}],
+        })
+
+        self.assertEqual(jobs, [cli.RunningJob("herbie", "feature/test", "123")])
+
+    def test_cmd_stop_posts_only_the_matching_running_job(self) -> None:
+        client_config = self.client_config()
+        requests: list[urllib.request.Request] = []
+
+        class CapturingOpener:
+            def open(self, request: object) -> FakeResponse:
+                assert not isinstance(request, str)
+                requests.append(cast(urllib.request.Request, request))
+                return FakeResponse(b"ok")
+
+        payload = {
+            "jobs": [
+                {"repo": "ruler", "branch": "feature/test", "job_id": "111"},
+                {"repo": "herbie", "branch": "main", "job_id": "222"},
+                {"repo": "herbie", "branch": "feature/test", "job_id": "333"},
+            ],
+        }
+
+        with (
+            self.client_open_patch(CapturingOpener()),
+            mock.patch.object(cli.ClientConfig, "fetch_json", return_value=payload) as fetch_json,
+            mock.patch("sys.stdout", new_callable=io.StringIO) as stdout,
+        ):
+            rc = cli.cmd_stop(client_config, "herbie", "feature/test")
+
+        self.assertEqual(rc, 0)
+        fetch_json.assert_called_once_with(cli.API_JOBS_PATH)
+        self.assertEqual(len(requests), 1)
+        self.assertEqual(requests[0].full_url, self.absolute_url(client_config, cli.STOP_PATH))
+        self.assertEqual(requests[0].get_method(), "POST")
+        self.assertEqual(requests[0].data, b"job_id=333")
+        self.assertEqual(stdout.getvalue(), "Stopped nightly for branch feature/test on herbie.\n")
+
+    def test_cmd_stop_refuses_when_branch_is_not_running(self) -> None:
+        client_config = self.client_config()
+        requests: list[urllib.request.Request] = []
+
+        class CapturingOpener:
+            def open(self, request: object) -> FakeResponse:
+                assert not isinstance(request, str)
+                requests.append(cast(urllib.request.Request, request))
+                return FakeResponse(b"ok")
+
+        with (
+            self.client_open_patch(CapturingOpener()),
+            mock.patch.object(cli.ClientConfig, "fetch_json", return_value={
+                "jobs": [{"repo": "herbie", "branch": "main", "job_id": "123"}],
+            }),
+        ):
+            with self.assertRaisesRegex(cli.CliError, "No running nightly for branch feature/test on herbie"):
+                cli.cmd_stop(client_config, "herbie", "feature/test")
+
+        self.assertEqual(requests, [])
+
+    def test_main_stop_requires_an_explicit_branch(self) -> None:
+        with mock.patch("sys.stderr", new_callable=io.StringIO):
+            with self.assertRaises(SystemExit) as ctx:
+                cli.main(["stop"])
+
+        self.assertEqual(ctx.exception.code, 2)
+
+    def test_main_stop_uses_the_explicit_branch(self) -> None:
+        client_config = self.client_config()
+        requests: list[urllib.request.Request] = []
+
+        class CapturingOpener:
+            def open(self, request: object) -> FakeResponse:
+                assert not isinstance(request, str)
+                requests.append(cast(urllib.request.Request, request))
+                return FakeResponse(b"ok")
+
+        with (
+            self.client_open_patch(CapturingOpener()),
+            mock.patch("sys.stdout", new_callable=io.StringIO),
+            mock.patch.object(cli, "load_client_config", return_value=client_config),
+            mock.patch.object(cli, "infer_repo", return_value="herbie"),
+            mock.patch.object(cli, "current_branch") as current_branch,
+            mock.patch.object(cli.ClientConfig, "fetch_json", return_value={
+                "jobs": [{"repo": "herbie", "branch": "feature/test", "job_id": "123"}],
+            }),
+        ):
+            rc = cli.main(["stop", "feature/test"])
+
+        self.assertEqual(rc, 0)
+        current_branch.assert_not_called()
+        self.assertEqual(len(requests), 1)
+        self.assertEqual(requests[0].data, b"job_id=123")
+
     def test_cmd_sync_refuses_when_ui_disables_sync(self) -> None:
         state = cli.IndexState(True, [])
 
@@ -1777,6 +1872,23 @@ class TestServerRunNow(unittest.TestCase):
 
         self.assertEqual(len(jobs), 1)
         self.assertEqual(jobs[0].branch, "feature/test%branch")
+
+    def test_api_jobs_lists_running_jobs_for_cli(self) -> None:
+        server = self.import_server()
+        runner = SimpleNamespace(log_dir=Path("/tmp/logs"), load=mock.Mock())
+        job = server.NightlyJob("123", "testrepo", "feature/test", "run.log")
+
+        with (
+            mock.patch.object(server.nightlies, "NightlyRunner", return_value=runner),
+            mock.patch.object(server, "get_nightly_jobs", return_value=[job]) as get_jobs,
+        ):
+            result = server.api_jobs()
+
+        self.assertEqual(result, {
+            "jobs": [{"repo": "testrepo", "branch": "feature/test", "job_id": "123"}],
+        })
+        runner.load.assert_called_once_with()
+        get_jobs.assert_called_once_with(runner.log_dir)
 
     def test_runnow_rejects_branch_not_available_on_nightly(self) -> None:
         server = self.import_server()
