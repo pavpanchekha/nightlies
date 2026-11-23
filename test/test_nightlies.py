@@ -2257,11 +2257,11 @@ class TestBranchRunner(unittest.TestCase):
             mock.patch.object(runner.os, "geteuid", return_value=0),
             mock.patch.object(runner, "run") as run,
         ):
-            apt_runner.exec(2, ["sudo", "apt", "install", "--yes", "racket"])
+            apt_runner.exec(2, ["sudo", "apt-get", "install", "--yes", "racket"])
 
         run.assert_called_once_with(
             [
-                "apt",
+                "apt-get",
                 "-o",
                 "Dir::State::extended_states=/dev/shm/apt-state/extended_states",
                 "install",
