@@ -115,7 +115,7 @@ def _parse_updates(stdout: str) -> List[AptPackageUpdate]:
 
 def check_updates(runner: AptRunner, pkgs: List[str]) -> List[AptPackageUpdate]:
     runner.log(1, f"Checking for updates to apt packages {' '.join(pkgs)}")
-    stdout = runner.exec(2, ["sudo", "apt", "install", "--dry-run"] + pkgs).stdout.decode("latin1")
+    stdout = runner.exec(2, ["sudo", "apt-get", "install", "--dry-run"] + pkgs).stdout.decode("latin1")
 
     # Parse the `apt` output, ugh
     match = APT_LINE_RE.search(stdout)
@@ -133,4 +133,4 @@ def check_updates(runner: AptRunner, pkgs: List[str]) -> List[AptPackageUpdate]:
 
 def install(runner: AptRunner, pkgs: List[str]) -> None:
     runner.log(1, f"Installing apt packages {' '.join(pkgs)}")
-    runner.exec(2, ["sudo", "apt", "install", "--yes"] + pkgs)
+    runner.exec(2, ["sudo", "apt-get", "install", "--yes"] + pkgs)
